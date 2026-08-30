@@ -35,8 +35,25 @@ class AuthService {
     return prefs.getString(_kServerUrl);
   }
 
+  /// Save the server URL to SharedPreferences.
+  Future<void> setServerUrl(String url) async {
+    var base = url.trim();
+    if (!base.startsWith('http://') && !base.startsWith('https://')) {
+      base = 'http://$base';
+    }
+    while (base.endsWith('/')) {
+      base = base.substring(0, base.length - 1);
+    }
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_kServerUrl, base);
+  }
+
   /// Try to discover the server URL from known local addresses.
   /// Returns the first reachable server URL, or null.
+  ///
+  /// When a tunnel URL is found via the local server's
+  /// /api/config/server-url endpoint, it is saved automatically
+  /// so the Flutter app stays in sync with the Cloudflare tunnel.
   Future<String?> discoverServerUrl() async {
     // First: check if we already have a saved URL from a previous session
     final savedUrl = await serverUrl;
@@ -75,6 +92,8 @@ class AuthService {
           final body = jsonDecode(response.body) as Map<String, dynamic>;
           final tunnelUrl = body['url'] as String?;
           if (tunnelUrl != null && tunnelUrl.isNotEmpty) {
+            // Auto-save the discovered tunnel URL
+            await setServerUrl(tunnelUrl);
             return tunnelUrl;
           }
           // No tunnel URL saved, but local server is reachable
