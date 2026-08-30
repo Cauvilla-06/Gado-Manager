@@ -1,0 +1,213 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+}
+
+model User {
+  id           String   @id @default(uuid())
+  name         String
+  email        String   @unique
+  passwordHash String
+  criadoEm     DateTime @default(now())
+  atualizadoEm DateTime @updatedAt
+
+  memberships       FarmMembership[]
+  requestsSent      FarmRequest[]
+  pesagensCriadas   WeightRecord[]
+  vacinasCriadas    Vaccination[]
+  vermifugosCriados Vermifuge[]
+  vitaminasCriadas  Vitamin[]
+}
+
+model Farm {
+  id           String   @id @default(uuid())
+  name         String
+  code         String   @unique // Código curto para compartilhar (ex: fazenda-abc123)
+  criadoEm     DateTime @default(now())
+  atualizadoEm DateTime @updatedAt
+
+  memberships FarmMembership[]
+  requests    FarmRequest[]
+  animals     Animal[]
+}
+
+model FarmMembership {
+  id       String   @id @default(uuid())
+  userId   String
+  farmId   String
+  role     String   @default("MEMBER") // OWNER | ADMIN | MEMBER
+  criadoEm DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  farm Farm @relation(fields: [farmId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, farmId])
+  @@index([userId])
+  @@index([farmId])
+}
+
+model FarmRequest {
+  id           String   @id @default(uuid())
+  userId       String
+  farmId       String
+  status       String   @default("PENDENTE") // PENDENTE | APROVADO | REJEITADO
+  message      String?
+  criadoEm     DateTime @default(now())
+  atualizadoEm DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  farm Farm @relation(fields: [farmId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([farmId])
+  @@index([status])
+}
+
+model Animal {
+  id                  String   @id @default(uuid())
+  farmId              String
+  numeroIdentificacao String
+  status              String   @default("ATIVO") // ATIVO | VENDIDO | INATIVO
+  cicloAtualId        String?
+  criadoEm            DateTime @default(now())
+  atualizadoEm        DateTime @updatedAt
+
+  farm       Farm           @relation(fields: [farmId], references: [id], onDelete: Cascade)
+  ciclos     AnimalCycle[]
+  pesagens   WeightRecord[]
+  vacinas    Vaccination[]
+  vermifugos Vermifuge[]
+  vitaminas  Vitamin[]
+
+  @@index([farmId])
+  @@index([numeroIdentificacao])
+  @@index([status])
+}
+
+model AnimalCycle {
+  id           String    @id @default(uuid())
+  animalId     String
+  numeroCiclo  Int
+  dataInicio   DateTime  @default(now())
+  dataFim      DateTime?
+  status       String    @default("ATIVO") // ATIVO | ENCERRADO
+  observacoes  String?
+  criadoEm     DateTime  @default(now())
+  atualizadoEm DateTime  @updatedAt
+
+  animal     Animal         @relation(fields: [animalId], references: [id], onDelete: Cascade)
+  pesagens   WeightRecord[]
+  vacinas    Vaccination[]
+  vermifugos Vermifuge[]
+  vitaminas  Vitamin[]
+
+  @@unique([animalId, numeroCiclo])
+  @@index([animalId])
+  @@index([status])
+}
+
+model WeightRecord {
+  id                String   @id @default(uuid())
+  animalId          String
+  cicloId           String
+  criadoPorId       String?
+  pesoKg            Float
+  dataPesagem       DateTime
+  dataRegistro      DateTime @default(now())
+  observacao        String?
+  origem            String   @default("WEB") // WEB | ANDROID
+  clientGeneratedId String?  @unique
+  sincronizado      Boolean  @default(true)
+  created_at        DateTime @default(now())
+  updated_at        DateTime @updatedAt
+
+  animal    Animal      @relation(fields: [animalId], references: [id], onDelete: Cascade)
+  ciclo     AnimalCycle @relation(fields: [cicloId], references: [id], onDelete: Cascade)
+  criadoPor User?       @relation(fields: [criadoPorId], references: [id], onDelete: SetNull)
+
+  @@index([animalId])
+  @@index([cicloId])
+  @@index([criadoPorId])
+  @@index([dataPesagem])
+  @@index([clientGeneratedId])
+}
+
+model Vaccination {
+  id                String    @id @default(uuid())
+  animalId          String
+  cicloId           String
+  criadoPorId       String?
+  nomeVacina        String
+  dataAplicacao     DateTime
+  dataProximaDose   DateTime?
+  lote              String?
+  observacao        String?
+  origem            String    @default("WEB") // WEB | ANDROID
+  clientGeneratedId String?   @unique
+  created_at        DateTime  @default(now())
+  updated_at        DateTime  @updatedAt
+
+  animal    Animal      @relation(fields: [animalId], references: [id], onDelete: Cascade)
+  ciclo     AnimalCycle @relation(fields: [cicloId], references: [id], onDelete: Cascade)
+  criadoPor User?       @relation(fields: [criadoPorId], references: [id], onDelete: SetNull)
+
+  @@index([animalId])
+  @@index([cicloId])
+  @@index([criadoPorId])
+  @@index([dataAplicacao])
+  @@index([clientGeneratedId])
+}
+
+model Vermifuge {
+  id                String    @id @default(uuid())
+  animalId          String
+  cicloId           String
+  criadoPorId       String?
+  nomeVermifugo     String
+  dose              String?
+  dataAplicacao     DateTime
+  dataProximaDose   DateTime?
+  observacao        String?
+  origem            String    @default("WEB") // WEB | ANDROID
+  clientGeneratedId String?   @unique
+  criadoEm          DateTime  @default(now())
+  atualizadoEm      DateTime  @updatedAt
+
+  animal    Animal      @relation(fields: [animalId], references: [id], onDelete: Cascade)
+  ciclo     AnimalCycle @relation(fields: [cicloId], references: [id], onDelete: Cascade)
+  criadoPor User?       @relation(fields: [criadoPorId], references: [id], onDelete: SetNull)
+
+  @@index([animalId])
+  @@index([cicloId])
+  @@index([criadoPorId])
+  @@index([dataAplicacao])
+  @@index([clientGeneratedId])
+}
+
+model Vitamin {
+  id                String    @id @default(uuid())
+  animalId          String
+  cicloId           String
+  criadoPorId       String?
+  nomeVitamina      String
+  dose              String?
+  dataAplicacao     DateTime
+  dataProximaDose   DateTime?
+  observacao        String?
+  origem            String    @default("WEB") // WEB | ANDROID
+  clientGeneratedId String?   @unique
+  criadoEm          DateTime  @default(now())
+  atualizadoEm      DateTime  @updatedAt
+
+  animal    Animal      @relation(fields: [animalId], references: [id], onDelete: Cascade)
+  ciclo     AnimalCycle @relation(fields: [cicloId], references: [id], onDelete: Cascade)
+  criadoPor User?       @relation(fields: [criadoPorId], references: [id], onDelete: SetNull)
+
+  @@index([animalId])
+  @@index([cicloId])
+  @@index([criadoPorId])
+  @@index([dataAplicacao])
+}

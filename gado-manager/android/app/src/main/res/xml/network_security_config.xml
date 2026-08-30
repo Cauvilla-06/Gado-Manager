@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <!-- Permite HTTP cleartext para desenvolvimento local (emulador 10.0.2.2 e localhost) -->
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="true">10.0.2.2</domain>
+        <domain includeSubdomains="true">localhost</domain>
+        <domain includeSubdomains="true">127.0.0.1</domain>
+        <domain includeSubdomains="true">10.0.3.2</domain>
+    </domain-config>
+
+    <!-- Permite HTTPS para tuneis (localtunnel, ngrok, cloudflare, etc.) -->
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="true">loca.lt</domain>
+        <domain includeSubdomains="true">ngrok.io</domain>
+        <domain includeSubdomains="true">ngrok-free.app</domain>
+        <domain includeSubdomains="true">trycloudflare.com</domain>
+        <domain includeSubdomains="true">localhost.run</domain>
+    </domain-config>
+</network-security-config>

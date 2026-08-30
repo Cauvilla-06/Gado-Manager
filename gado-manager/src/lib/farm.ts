@@ -1,0 +1,111 @@
+import { headers } from "next/headers";
+import { db } from "@/lib/db";
+
+/**
+ * Get the current user's active farm.
+ * The middleware decodes the JWT and passes userId via x-user-id header.
+ */
+export async function getCurrentFarm() {
+  try {
+    const h = await headers();
+    const userId = h.get("x-user-id");
+
+    if (!userId) {
+      return { user: null, farm: null, membership: null };
+    }
+
+    const user = await db.user.findUnique({
+      where: { id: userId },
+      select: { id: true, name: true, email: true },
+    });
+
+    if (!user) {
+      return { user: null, farm: null, membership: null };
+    }
+
+    // Check if user has selected a specific farm via cookie
+    let membership;
+    const selectedFarmId = h.get("x-selected-farm-id");
+
+    if (selectedFarmId) {
+      membership = await db.farmMembership.findFirst({
+        where: { userId: user.id, farmId: selectedFarmId },
+        include: { farm: true },
+      });
+
+      // Se selecionou uma farm específica mas não tem acesso, retorna null
+      if (!membership) {
+        return { user, farm: null, membership: null };
+      }
+    }
+
+    // Fallback to first farm
+    if (!membership) {
+      membership = await db.farmMembership.findFirst({
+        where: { userId: user.id },
+        include: { farm: true },
+        orderBy: { criadoEm: "asc" },
+      });
+    }
+
+    if (!membership) {
+      return { user, farm: null, membership: null };
+    }
+
+    // Validar se o usuário tem permissão de leitura na farm
+    const validRoles = ["OWNER", "ADMIN", "MEMBER"];
+    if (!validRoles.includes(membership.role)) {
+      return { user, farm: null, membership: null };
+    }
+
+    return {
+      user,
+      farm: membership.farm,
+      membership,
+    };
+  } catch (error) {
+    console.error("getCurrentFarm error:", error);
+    return { user: null, farm: null, membership: null };
+  }
+}
+
+/**
+ * Get all farms the user belongs to.
+ */
+export async function getUserFarms(userId: string) {
+  const memberships = await db.farmMembership.findMany({
+    where: { userId },
+    include: { farm: true },
+    orderBy: { criadoEm: "asc" },
+  });
+
+  return memberships.map((m) => ({
+    farm: m.farm,
+    role: m.role,
+  }));
+}
+
+/**
+ * Verifica se o usuário tem acesso de escrita na farm.
+ */
+export async function canWriteToFarm(userId: string, farmId: string): Promise<boolean> {
+  const membership = await db.farmMembership.findFirst({
+    where: { userId, farmId },
+  });
+
+  if (!membership) return false;
+
+  const writeRoles = ["OWNER", "ADMIN"];
+  return writeRoles.includes(membership.role);
+}
+
+/**
+ * Verifica se o usuário é owner da farm.
+ */
+export async function isFarmOwner(userId: string, farmId: string): Promise<boolean> {
+  const membership = await db.farmMembership.findFirst({
+    where: { userId, farmId },
+  });
+
+  return membership?.role === "OWNER";
+}
