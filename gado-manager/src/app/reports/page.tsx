@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import React, { useEffect, useState } from "react";
 import Link from "next/link";
 import dynamic from "next/dynamic";
 import { BarChart3, TrendingUp, Beef, FileText, Download, Table, ChevronDown, ChevronRight, Syringe } from "lucide-react";
@@ -912,8 +912,8 @@ export default function ReportsPage() {
               </thead>
               <tbody className="divide-y">
                 {animais.map((a) => (
-                  <>
-                  <tr key={a.animal.id} className="hover:bg-muted/30">
+                  <React.Fragment key={a.animal.id}>
+                  <tr className="hover:bg-muted/30">
                     <td className="px-2 py-2">
                       <button
                         onClick={() => toggleExpanded(a.animal.id)}
@@ -1063,7 +1063,7 @@ export default function ReportsPage() {
                       </td>
                     </tr>
                   )}
-                  </>
+                  </React.Fragment>
                 ))}
               </tbody>
             </table>
