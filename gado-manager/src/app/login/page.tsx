@@ -1,10 +1,12 @@
 "use client";
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { Beef, AlertTriangle } from "lucide-react";
 
 export default function LoginPage() {
+  const router = useRouter();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
@@ -29,8 +31,10 @@ export default function LoginPage() {
         return;
       }
 
-      // Success — redirect to home
-      window.location.href = "/"; // eslint-disable-line @next/next/no-location-assign-relative-destination
+      // Success — wait a tick for the cookie to be stored, then redirect
+      await new Promise((r) => setTimeout(r, 100));
+      router.push("/");
+      router.refresh();
     } catch {
       setError("Erro ao fazer login");
     } finally {

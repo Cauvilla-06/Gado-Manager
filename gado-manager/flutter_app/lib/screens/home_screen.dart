@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
@@ -6,8 +8,12 @@ import '../services/api_service.dart';
 import '../services/database_helper.dart';
 import 'add_animal_screen.dart';
 import 'add_record_screen.dart';
+import 'animal_detail_screen.dart';
+import 'edit_animal_screen.dart';
+import 'edit_record_screen.dart';
 import 'farm_selection_screen.dart';
 import 'login_screen.dart';
+import 'offline_report_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -26,13 +32,63 @@ class _HomeScreenState extends State<HomeScreen> {
   bool _online = false;
   bool _loading = true;
   bool _syncing = false;
+  bool _pendingExpanded = false;
   String? _userName;
   String? _farmName;
+  Timer? _autoReconnectTimer;
 
   @override
   void initState() {
     super.initState();
     _loadData();
+    _startAutoReconnect();
+  }
+
+  @override
+  void dispose() {
+    _autoReconnectTimer?.cancel();
+    super.dispose();
+  }
+
+  /// Verifica periodicamente se o servidor está acessível e sincroniza dados.
+  /// A cada 30 segundos tenta descobrir o servidor automaticamente.
+  void _startAutoReconnect() {
+    _autoReconnectTimer = Timer.periodic(
+      const Duration(seconds: 30),
+      (_) => _autoReconnect(),
+    );
+  }
+
+  Future<void> _autoReconnect() async {
+    if (_syncing) return;
+    try {
+      final isOn = await _api.isOnline();
+      if (!isOn) {
+        if (mounted) setState(() => _online = false);
+        return;
+      }
+      // Tenta buscar dados do servidor sem mostrar loading
+      final animals = await _api.fetchAnimals();
+      animals.sort((a, b) => a.numero.compareTo(b.numero));
+      await _db.replaceAnimals(animals);
+      if (!mounted) return;
+      setState(() {
+        _animals = animals;
+        _online = true;
+      });
+      _api.resetRediscovery();
+
+      // Cache automático de todos os detalhes dos animais
+      _cacheAllAnimalDetails(animals);
+
+      // Sincroniza pendentes automaticamente
+      final pending = await _db.getPendingRecords();
+      if (pending.isNotEmpty && !_syncing) {
+        await _sync();
+      }
+    } catch (_) {
+      if (mounted) setState(() => _online = false);
+    }
   }
 
   Future<void> _loadData() async {
@@ -40,6 +96,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
     // 1. Carrega cache local instantaneamente
     final animals = await _db.getAnimals();
+    animals.sort((a, b) => a.numero.compareTo(b.numero));
     final pending = await _db.getPendingRecords();
     final userName = await _auth.userName;
     final farmName = await _auth.selectedFarmName;
@@ -65,14 +122,65 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> _refreshFromServer() async {
     try {
       final animals = await _api.fetchAnimals();
+      animals.sort((a, b) => a.numero.compareTo(b.numero));
       await _db.replaceAnimals(animals);
       if (!mounted) return;
       setState(() {
         _animals = animals;
         _online = true;
       });
+      _api.resetRediscovery();
+
+      // Cache automático de todos os detalhes dos animais para offline
+      _cacheAllAnimalDetails(animals);
     } catch (_) {
       if (mounted) setState(() => _online = false);
+    }
+  }
+
+  /// Busca detalhes de todos os animais e salva no cache local.
+  /// Salva incrementalmente — cada animal é cacheado assim que obtém sucesso.
+  /// Roda em background (sem bloquear a UI).
+  void _cacheAllAnimalDetails(List<Animal> animals) async {
+    final results = <String, AnimalDetail>{};
+    final failed = <Animal>[];
+
+    // 1ª passada: busca cada animal e salva imediatamente no cache
+    for (final a in animals) {
+      try {
+        final detail = await _api.fetchAnimalDetail(a.id, maxRetries: 1);
+        if (detail != null) {
+          results[a.id] = detail;
+          // Salva no cache imediatamente para não perder dados
+          await _db.cacheAnimalDetail(a.id, detail);
+        } else {
+          failed.add(a);
+        }
+      } catch (_) {
+        failed.add(a);
+      }
+    }
+
+    // Retry: tenta novamente os que falharam (até 2x)
+    _api.resetRediscovery();
+    for (var retry = 0; retry < 2 && failed.isNotEmpty; retry++) {
+      await Future.delayed(const Duration(seconds: 3));
+      final stillFailed = <Animal>[];
+      for (final a in failed) {
+        try {
+          final detail = await _api.fetchAnimalDetail(a.id, maxRetries: 1);
+          if (detail != null) {
+            results[a.id] = detail;
+            await _db.cacheAnimalDetail(a.id, detail);
+          } else {
+            stillFailed.add(a);
+          }
+        } catch (_) {
+          stillFailed.add(a);
+        }
+      }
+      failed.clear();
+      failed.addAll(stillFailed);
     }
   }
 
@@ -96,6 +204,8 @@ class _HomeScreenState extends State<HomeScreen> {
             backgroundColor: Colors.green,
           ),
         );
+        // Atualiza animais após sincronização
+        await _refreshFromServer();
       }
     } catch (_) {
       // Sem conexão ou erro — mantém tudo salvo localmente
@@ -113,12 +223,48 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
+  Future<void> _reconnect() async {
+    setState(() => _loading = true);
+    try {
+      // Reseta flag para permitir nova tentativa de rediscovery
+      _api.resetRediscovery();
+      final url = await _auth.rediscoverServer();
+      if (url != null && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Servidor encontrado: $url'),
+            backgroundColor: Colors.green,
+          ),
+        );
+        await _refreshFromServer();
+        await _sync();
+      } else if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Servidor não encontrado. Verifique se está rodando.'),
+            backgroundColor: Colors.orange,
+          ),
+        );
+      }
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Erro ao reconectar.'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
   Future<void> _switchFarm() async {
     final result = await Navigator.of(context).push<Farm>(
       MaterialPageRoute(builder: (_) => const FarmSelectionScreen()),
     );
     if (result != null && mounted) {
-      // Faz reload completo da tela com a nova fazenda
       await _loadData();
     }
   }
@@ -128,8 +274,12 @@ class _HomeScreenState extends State<HomeScreen> {
       MaterialPageRoute(builder: (_) => const AddAnimalScreen()),
     );
     if (created == true) {
-      // Refresh animal list
-      await _refreshFromServer();
+      // Recarrega pendentes
+      final pending = await _db.getPendingRecords();
+      if (!mounted) return;
+      setState(() => _pending = pending);
+      // Tenta sincronizar se online
+      if (_online) await _sync();
     }
   }
 
@@ -141,6 +291,104 @@ class _HomeScreenState extends State<HomeScreen> {
     final pending = await _db.getPendingRecords();
     if (!mounted) return;
     setState(() => _pending = pending);
+  }
+
+  void _openAnimalDetail(Animal animal) async {
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => AnimalDetailScreen(
+          animal: animal,
+          allAnimals: _animals,
+        ),
+      ),
+    );
+    // Recarrega pendentes ao voltar
+    final pending = await _db.getPendingRecords();
+    if (!mounted) return;
+    setState(() => _pending = pending);
+  }
+
+  void _openOfflineReport() {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => OfflineReportScreen(animals: _animals),
+      ),
+    );
+  }
+
+  // --- Edição/exclusão de registros pendentes na home ---
+
+  IconData _getIconForType(RecordType tipo) {
+    switch (tipo) {
+      case RecordType.pesagem: return Icons.monitor_weight_outlined;
+      case RecordType.vacina: return Icons.vaccines;
+      case RecordType.vermifugo: return Icons.bug_report;
+      case RecordType.vitamina: return Icons.medication;
+      case RecordType.cadastro: return Icons.pets;
+    }
+  }
+
+  Future<void> _editPendingFromHome(PendingRecord record) async {
+    if (record.tipo == RecordType.cadastro) {
+      // Busca registros vinculados (mesmo batchId)
+      final allPending = await _db.getPendingRecords();
+      final linked = allPending
+          .where((r) => r.batchId == record.batchId && r.id != record.id)
+          .toList();
+
+      if (!mounted) return;
+      final changed = await Navigator.of(context).push<bool>(
+        MaterialPageRoute(
+          builder: (_) => EditAnimalScreen(
+            cadastroRecord: record,
+            linkedRecords: linked,
+          ),
+        ),
+      );
+      if (changed == true || true) {
+        final pending = await _db.getPendingRecords();
+        if (mounted) setState(() => _pending = pending);
+      }
+      return;
+    }
+
+    // Para outros tipos, navega para a tela de edição completa
+    final changed = await Navigator.of(context).push<bool>(
+      MaterialPageRoute(
+        builder: (_) => EditRecordScreen(record: record),
+      ),
+    );
+    if (changed == true) {
+      final pending = await _db.getPendingRecords();
+      if (mounted) setState(() => _pending = pending);
+    }
+  }
+
+  Future<void> _deletePendingFromHome(PendingRecord record) async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Excluir registro?'),
+        content: Text('Excluir ${record.tipo.label} de ${DateFormat('dd/MM/yyyy').format(record.criadoEm)}?'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancelar')),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Excluir', style: TextStyle(color: Colors.red)),
+          ),
+        ],
+      ),
+    );
+    if (confirm == true) {
+      await _db.deletePendingRecord(record.id);
+      final pending = await _db.getPendingRecords();
+      if (mounted) {
+        setState(() => _pending = pending);
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Registro excluído'), backgroundColor: Colors.orange),
+        );
+      }
+    }
   }
 
   String get _statusLabel =>
@@ -166,6 +414,9 @@ class _HomeScreenState extends State<HomeScreen> {
           PopupMenuButton<String>(
             onSelected: (value) {
               switch (value) {
+                case 'reconnect':
+                  _reconnect();
+                  break;
                 case 'switch_farm':
                   _switchFarm();
                   break;
@@ -190,6 +441,15 @@ class _HomeScreenState extends State<HomeScreen> {
                 ),
               ),
               const PopupMenuDivider(),
+              const PopupMenuItem(
+                value: 'reconnect',
+                child: ListTile(
+                  leading: Icon(Icons.wifi_find),
+                  title: Text('Reconectar ao servidor'),
+                  dense: true,
+                  contentPadding: EdgeInsets.zero,
+                ),
+              ),
               const PopupMenuItem(
                 value: 'switch_farm',
                 child: ListTile(
@@ -274,18 +534,85 @@ class _HomeScreenState extends State<HomeScreen> {
               ],
             ),
           ),
-          // Pendentes resumo
+          // Pendentes - lista expansiva com edição
           if (_pending.isNotEmpty)
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
               child: Card(
-                color: Theme.of(context).colorScheme.primaryContainer,
+                color: Colors.orange.shade50,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    ListTile(
+                      leading: const Icon(Icons.cloud_upload_outlined),
+                      title: Text(
+                          '${_pending.length} registro(s) aguardando sincronização'),
+                      subtitle: Text(_describePending()),
+                      trailing: Icon(
+                        _pendingExpanded ? Icons.expand_less : Icons.expand_more,
+                      ),
+                      onTap: () => setState(() => _pendingExpanded = !_pendingExpanded),
+                    ),
+                    if (_pendingExpanded)
+                      ..._pending.map((r) {
+                        final date = DateFormat('dd/MM/yyyy').format(r.criadoEm);
+                        String detail;
+                        switch (r.tipo) {
+                          case RecordType.pesagem:
+                            detail = '${r.payload['pesoKg'] ?? '?'} kg - $date';
+                            break;
+                          case RecordType.vacina:
+                            detail = '${r.payload['nomeVacina'] ?? '?'} - $date';
+                            break;
+                          case RecordType.vermifugo:
+                            detail = '${r.payload['nomeVermifugo'] ?? '?'} - $date';
+                            break;
+                          case RecordType.vitamina:
+                            detail = '${r.payload['nomeVitamina'] ?? '?'} - $date';
+                            break;
+                          case RecordType.cadastro:
+                            detail = 'Boi #${r.payload['numeroIdentificacao'] ?? '?'} - $date';
+                            break;
+                        }
+                        return ListTile(
+                          dense: true,
+                          leading: Icon(_getIconForType(r.tipo), size: 18, color: Colors.orange.shade700),
+                          title: Text(r.tipo.label, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500)),
+                          subtitle: Text(detail, style: const TextStyle(fontSize: 11)),
+                          trailing: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              IconButton(
+                                icon: const Icon(Icons.edit_outlined, size: 18),
+                                onPressed: () => _editPendingFromHome(r),
+                              ),
+                              IconButton(
+                                icon: const Icon(Icons.delete_outline, size: 18),
+                                onPressed: () => _deletePendingFromHome(r),
+                              ),
+                            ],
+                          ),
+                        );
+                      }),
+                    const SizedBox(height: 8),
+                  ],
+                ),
+              ),
+            ),
+          // Botão de relatório offline
+          if (_animals.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+              child: Card(
                 child: ListTile(
-                  leading: const Icon(Icons.cloud_upload_outlined),
-                  title: Text(
-                      '${_pending.length} registro(s) aguardando sincronização'),
-                  subtitle: Text(_describePending()),
-                  isThreeLine: _pending.length > 3,
+                  leading: Icon(
+                    Icons.assessment,
+                    color: Theme.of(context).colorScheme.primary,
+                  ),
+                  title: const Text('Relatório Offline'),
+                  subtitle: const Text('Visualizar dados locais'),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: _openOfflineReport,
                 ),
               ),
             ),
@@ -344,12 +671,18 @@ class _HomeScreenState extends State<HomeScreen> {
                                   : animal.status == 'VENDIDO'
                                       ? 'Vendido'
                                       : 'Inativo'),
-                              trailing: animal.status != 'ATIVO'
-                                  ? Chip(
+                              trailing: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  if (animal.status != 'ATIVO')
+                                    Chip(
                                       label: Text(animal.status),
                                       visualDensity: VisualDensity.compact,
-                                    )
-                                  : null,
+                                    ),
+                                  const Icon(Icons.chevron_right, size: 20),
+                                ],
+                              ),
+                              onTap: () => _openAnimalDetail(animal),
                             );
                           },
                         ),

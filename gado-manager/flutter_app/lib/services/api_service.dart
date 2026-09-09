@@ -51,39 +51,48 @@ class AuthService {
   /// Try to discover the server URL from known local addresses.
   /// Returns the first reachable server URL, or null.
   ///
-  /// When a tunnel URL is found via the local server's
-  /// /api/config/server-url endpoint, it is saved automatically
-  /// so the Flutter app stays in sync with the Cloudflare tunnel.
+  /// Prioridade:
+  /// 1. Tenta a URL salva (pode ser um tunnel ativo)
+  /// 2. Busca o servidor na rede local e obtém a URL do tunnel mais recente
+  ///
+  /// Quando encontra o servidor local, busca automaticamente a URL
+  /// atualizada do Cloudflare Tunnel e salva para uso futuro.
   Future<String?> discoverServerUrl() async {
-    // First: check if we already have a saved URL from a previous session
+    // Endereços comuns de rede local para tentar
+    final localCandidates = [
+      'http://10.0.2.2:3000',      // Android emulator
+      'http://localhost:3000',      // Same machine
+      'http://127.0.0.1:3000',     // Same machine
+      'http://192.168.1.175:3000',  // PC local network IP
+      'http://192.168.0.1:3000',   // Common gateway
+      'http://192.168.1.1:3000',   // Common gateway
+      'http://10.0.0.1:3000',      // Common gateway
+    ];
+
+    // 1. Tenta a URL salva primeiro (pode ser tunnel ativo)
     final savedUrl = await serverUrl;
     if (savedUrl != null && savedUrl.isNotEmpty) {
-      // Verify it's still reachable
       try {
         final response = await http
             .get(Uri.parse('$savedUrl/api/config/server-url'))
             .timeout(const Duration(seconds: 3));
         if (response.statusCode == 200) {
+          final body = jsonDecode(response.body) as Map<String, dynamic>;
+          final tunnelUrl = body['url'] as String?;
+          if (tunnelUrl != null && tunnelUrl.isNotEmpty) {
+            // Atualiza URL salva se o tunnel mudou
+            await setServerUrl(tunnelUrl);
+            return tunnelUrl;
+          }
           return savedUrl;
         }
       } catch (_) {
-        // Saved URL not reachable anymore, continue discovery
+        // URL salva não está mais acessível, tenta rede local
       }
     }
 
-    // Common local addresses to try
-    final candidates = [
-      'http://10.0.2.2:3000',    // Android emulator
-      'http://localhost:3000',    // Same machine
-      'http://127.0.0.1:3000',   // Same machine
-      'http://192.168.1.175:3000', // PC local network IP
-      'http://192.168.0.1:3000',  // Common gateway
-      'http://192.168.1.1:3000',  // Common gateway
-      'http://10.0.0.1:3000',     // Common gateway
-    ];
-
-    // Try each candidate in parallel with a short timeout
-    for (final candidate in candidates) {
+    // 2. Tenta rede local para pegar a URL mais recente do tunnel
+    for (final candidate in localCandidates) {
       try {
         final response = await http
             .get(Uri.parse('$candidate/api/config/server-url'))
@@ -92,18 +101,25 @@ class AuthService {
           final body = jsonDecode(response.body) as Map<String, dynamic>;
           final tunnelUrl = body['url'] as String?;
           if (tunnelUrl != null && tunnelUrl.isNotEmpty) {
-            // Auto-save the discovered tunnel URL
+            // Sempre atualiza com a URL mais recente do tunnel
             await setServerUrl(tunnelUrl);
             return tunnelUrl;
           }
-          // No tunnel URL saved, but local server is reachable
+          // Servidor local acessível mas sem tunnel configurado
           return candidate;
         }
       } catch (_) {
-        // Not reachable, try next
+        // Não acessível, tenta próximo
       }
     }
+
     return null;
+  }
+
+  /// Force re-discover the server URL.
+  /// Use this when the user knows the server was restarted.
+  Future<String?> rediscoverServer() async {
+    return discoverServerUrl();
   }
 
   /// Try to reach a specific server URL directly.
@@ -134,8 +150,62 @@ class AuthService {
 
   /// Faz login no servidor e guarda o token JWT.
   ///
-  /// [url] pode vir sem protocolo; normalizamos para http:// nesse caso.
+  /// Tenta na URL informada. Se falhar (tunnel morto, etc),
+  /// tenta automaticamente os endereços locais.
   Future<String> login(String url, String email, String password) async {
+    var base = _normalizeUrl(url);
+
+    // Tenta login na URL informada
+    try {
+      final result = await _tryLogin(base, email, password);
+      if (result != null) return result;
+    } catch (_) {
+      // URL informada falhou, tenta endereços locais
+    }
+
+    // Se falhou, tenta endereços locais automaticamente
+    final localCandidates = [
+      'http://10.0.2.2:3000',      // Android emulator
+      'http://localhost:3000',      // Same machine
+      'http://127.0.0.1:3000',     // Same machine
+      'http://192.168.1.175:3000',  // PC local network IP
+      'http://192.168.0.1:3000',   // Common gateway
+      'http://192.168.1.1:3000',   // Common gateway
+    ];
+
+    for (final candidate in localCandidates) {
+      if (candidate == base) continue; // já tentou
+      try {
+        final result = await _tryLogin(candidate, email, password);
+        if (result != null) {
+          // Busca URL do tunnel via este servidor local
+          try {
+            final tunnelResp = await http
+                .get(Uri.parse('$candidate/api/config/server-url'))
+                .timeout(const Duration(seconds: 3));
+            if (tunnelResp.statusCode == 200) {
+              final tunnelBody = jsonDecode(tunnelResp.body) as Map<String, dynamic>;
+              final tunnelUrl = tunnelBody['url'] as String?;
+              if (tunnelUrl != null && tunnelUrl.isNotEmpty) {
+                await setServerUrl(tunnelUrl);
+                return tunnelUrl;
+              }
+            }
+          } catch (_) {}
+          await setServerUrl(candidate);
+          return candidate;
+        }
+      } catch (_) {
+        // Próximo candidato
+      }
+    }
+
+    throw Exception('Não foi possível conectar ao servidor. '
+        'Verifique se o servidor está rodando e tente novamente.');
+  }
+
+  /// Normaliza URL (adiciona protocolo, remove barra final)
+  String _normalizeUrl(String url) {
     var base = url.trim();
     if (!base.startsWith('http://') && !base.startsWith('https://')) {
       base = 'http://$base';
@@ -143,19 +213,20 @@ class AuthService {
     while (base.endsWith('/')) {
       base = base.substring(0, base.length - 1);
     }
+    return base;
+  }
 
+  /// Tenta fazer login em uma URL específica. Retorna null se falhar.
+  Future<String?> _tryLogin(String base, String email, String password) async {
     final response = await http
         .post(
           Uri.parse('$base/api/auth/login'),
           headers: {
             'Content-Type': 'application/json',
-            // Necessario para tuneis (localtunnel/ngrok) nao interceptarem a requisicao
-            'bypass-tunnel-reminder': 'true',
-            'ngrok-skip-browser-warning': 'true',
           },
           body: jsonEncode({'email': email.trim(), 'password': password}),
         )
-        .timeout(const Duration(seconds: 15));
+        .timeout(const Duration(seconds: 10));
 
     final body = jsonDecode(response.body) as Map<String, dynamic>;
     if (response.statusCode != 200 || body['token'] == null) {
@@ -207,6 +278,7 @@ class ApiService {
   static const _timeout = Duration(seconds: 20);
 
   final AuthService auth;
+  bool _rediscovered = false;
 
   ApiService(this.auth);
 
@@ -245,16 +317,51 @@ class ApiService {
     );
   }
 
+  /// Executa uma requisição HTTP com auto-retry.
+  /// Se a requisição falhar, tenta rediscoverServer() uma vez e repete.
+  Future<http.Response> _requestWithRetry(
+    Future<http.Response> Function(String baseUrl, Map<String, String> headers) request,
+  ) async {
+    final baseUrl = await _baseUrl();
+    final headers = await _headers();
+
+    try {
+      final response = await request(baseUrl, headers).timeout(_timeout);
+      return response;
+    } catch (_) {
+      // Primeira tentativa falhou — tenta rediscover
+      if (_rediscovered) rethrow;
+
+      final newUrl = await auth.discoverServerUrl();
+      if (newUrl != null && newUrl != baseUrl) {
+        _rediscovered = true;
+        final newHeaders = await _headers();
+        try {
+          final response = await request(newUrl, newHeaders).timeout(_timeout);
+          return response;
+        } catch (_) {
+          rethrow;
+        }
+      }
+      rethrow;
+    }
+  }
+
+  /// Reseta o flag de rediscovery. Chamar após operações de longa duração.
+  void resetRediscovery() {
+    _rediscovered = false;
+  }
+
   // --- Farm management ---
 
   /// Fetch all farms the current user belongs to.
   Future<List<Farm>> fetchFarms() async {
-    final response = await http
-        .get(
-          Uri.parse('${await _baseUrl()}/api/farms'),
-          headers: await _headers(),
-        )
-        .timeout(_timeout);
+    final response = await _requestWithRetry(
+      (baseUrl, headers) => http.get(
+        Uri.parse('$baseUrl/api/farms'),
+        headers: headers,
+      ),
+    );
 
     if (response.statusCode != 200) {
       throw Exception('Erro ao buscar fazendas (${response.statusCode})');
@@ -335,12 +442,12 @@ class ApiService {
 
   /// Busca os animais do servidor (endpoint leve) e retorna a lista.
   Future<List<Animal>> fetchAnimals() async {
-    final response = await http
-        .get(
-          Uri.parse('${await _baseUrl()}/api/animals/summary'),
-          headers: await _headers(),
-        )
-        .timeout(_timeout);
+    final response = await _requestWithRetry(
+      (baseUrl, headers) => http.get(
+        Uri.parse('$baseUrl/api/animals/summary'),
+        headers: headers,
+      ),
+    );
 
     if (response.statusCode != 200) {
       throw Exception('Erro ao buscar animais (${response.statusCode})');
@@ -352,8 +459,10 @@ class ApiService {
 
   /// Envia todos os registros pendentes ao servidor.
   ///
-  /// - Cadastros de animal → POST /api/animals (individual)
-  /// - Pesagens/vacinas/etc → POST /api/sync (lote)
+  /// Processa registros agrupados por batchId:
+  /// - Se um batch tem um cadastro de animal + registros, cria o animal
+  ///   primeiro e depois sincroniza os registros vinculados.
+  /// - Registros sem batchId são sincronizados individualmente.
   ///
   /// Retorna os ids que foram processados com sucesso,
   /// para serem removidos do armazenamento local.
@@ -362,101 +471,198 @@ class ApiService {
 
     final syncedIds = <String>{};
 
-    // Separa cadastros de animais dos demais registros
-    final cadastros = pending.where((r) => r.tipo == RecordType.cadastro).toList();
-    final outros = pending.where((r) => r.tipo != RecordType.cadastro).toList();
-
-    // 1. Sincroniza cadastros de animais (individualmente via POST /api/animals)
-    for (final r in cadastros) {
-      try {
-        final response = await http
-            .post(
-              Uri.parse('${await _baseUrl()}/api/animals'),
-              headers: await _headers(),
-              body: jsonEncode({
-                'numeroIdentificacao': r.payload['numeroIdentificacao'],
-              }),
-            )
-            .timeout(_timeout);
-
-        if (response.statusCode == 200 || response.statusCode == 201) {
-          syncedIds.add(r.id);
-        }
-        // Se der erro (ex: número duplicado), mantém pendente para nova tentativa
-      } catch (_) {
-        // Sem conexão ou erro — mantém pendente
-      }
+    // Agrupa por batchId
+    final batches = <String, List<PendingRecord>>{};
+    for (final r in pending) {
+      final batchKey = r.batchId ?? r.id;
+      batches.putIfAbsent(batchKey, () => []).add(r);
     }
 
-    // 2. Sincroniza registros de pesagem/vacina/etc (lote via POST /api/sync)
-    if (outros.isNotEmpty) {
-      final pesagens = <Map<String, dynamic>>[];
-      final vacinas = <Map<String, dynamic>>[];
-      final vermifugos = <Map<String, dynamic>>[];
-      final vitaminas = <Map<String, dynamic>>[];
+    for (final entry in batches.entries) {
+      final batchRecords = entry.value;
+      final cadastro = batchRecords
+          .where((r) => r.tipo == RecordType.cadastro)
+          .toList();
+      final outros = batchRecords
+          .where((r) => r.tipo != RecordType.cadastro)
+          .toList();
 
-      for (final r in outros) {
-        switch (r.tipo) {
-          case RecordType.pesagem:
-            pesagens.add(r.payload);
-            break;
-          case RecordType.vacina:
-            vacinas.add(r.payload);
-            break;
-          case RecordType.vermifugo:
-            vermifugos.add(r.payload);
-            break;
-          case RecordType.vitamina:
-            vitaminas.add(r.payload);
-            break;
-          case RecordType.cadastro:
-            // Já processado acima
-            break;
-        }
-      }
+      // Se tem cadastro de animal no batch, cria primeiro
+      if (cadastro.isNotEmpty) {
+        bool animalCreated = false;
+        for (final r in cadastro) {
+          try {
+            final response = await http
+                .post(
+                  Uri.parse('${await _baseUrl()}/api/animals'),
+                  headers: await _headers(),
+                  body: jsonEncode({
+                    'numeroIdentificacao': r.payload['numeroIdentificacao'],
+                  }),
+                )
+                .timeout(_timeout);
 
-      try {
-        final response = await http
-            .post(
-              Uri.parse('${await _baseUrl()}/api/sync'),
-              headers: await _headers(),
-              body: jsonEncode({
-                'pesagens': pesagens,
-                'vacinas': vacinas,
-                'vermifugos': vermifugos,
-                'vitaminas': vitaminas,
-              }),
-            )
-            .timeout(_timeout);
-
-        if (response.statusCode == 200) {
-          final body = jsonDecode(response.body) as Map<String, dynamic>;
-
-          // Marca todos como sincronizados por padrão
-          for (final r in outros) {
-            syncedIds.add(r.id);
-          }
-
-          // Se o servidor reportar erros por número de animal,
-          // mantém os registros correspondentes para nova tentativa.
-          final erros = (body['erros'] as List?)?.cast<String>() ?? const [];
-          for (final erro in erros) {
-            final match = RegExp(r'Animal nº (.+?) ').firstMatch(erro);
-            if (match != null) {
-              final numero = match.group(1)!;
-              for (final r in outros.where(
-                  (p) => p.payload['animalNumero'] == numero)) {
-                syncedIds.remove(r.id);
-              }
+            if (response.statusCode == 200 || response.statusCode == 201) {
+              syncedIds.add(r.id);
+              animalCreated = true;
             }
+          } catch (_) {
+            // Sem conexão ou erro — mantém pendente
           }
         }
-      } catch (_) {
-        // Sem conexão ou erro — mantém tudo pendente
+
+        // Se o animal foi criado, sincroniza os registros vinculados
+        if (animalCreated && outros.isNotEmpty) {
+          await _syncRecordsBatch(outros, syncedIds);
+        } else if (!animalCreated && outros.isNotEmpty) {
+          // Animal não foi criado, mas podemos tentar sincronizar
+          // os registros (o servidor pode aceitar por animalNumero)
+          await _syncRecordsBatch(outros, syncedIds);
+        }
+      } else {
+        // Sem cadastro — sincroniza registros diretamente
+        await _syncRecordsBatch(outros, syncedIds);
       }
     }
 
     return syncedIds;
+  }
+
+  /// Sincroniza um lote de registros (pesagens, vacinas, etc.)
+  Future<void> _syncRecordsBatch(
+    List<PendingRecord> records,
+    Set<String> syncedIds,
+  ) async {
+    if (records.isEmpty) return;
+
+    final pesagens = <Map<String, dynamic>>[];
+    final vacinas = <Map<String, dynamic>>[];
+    final vermifugos = <Map<String, dynamic>>[];
+    final vitaminas = <Map<String, dynamic>>[];
+
+    for (final r in records) {
+      switch (r.tipo) {
+        case RecordType.pesagem:
+          pesagens.add(r.payload);
+          break;
+        case RecordType.vacina:
+          vacinas.add(r.payload);
+          break;
+        case RecordType.vermifugo:
+          vermifugos.add(r.payload);
+          break;
+        case RecordType.vitamina:
+          vitaminas.add(r.payload);
+          break;
+        case RecordType.cadastro:
+          // Não processado aqui
+          break;
+      }
+    }
+
+    try {
+      final response = await http
+          .post(
+            Uri.parse('${await _baseUrl()}/api/sync'),
+            headers: await _headers(),
+            body: jsonEncode({
+              'pesagens': pesagens,
+              'vacinas': vacinas,
+              'vermifugos': vermifugos,
+              'vitaminas': vitaminas,
+            }),
+          )
+          .timeout(_timeout);
+
+      if (response.statusCode == 200) {
+        final body = jsonDecode(response.body) as Map<String, dynamic>;
+
+        // Marca todos como sincronizados por padrão
+        for (final r in records) {
+          syncedIds.add(r.id);
+        }
+
+        // Se o servidor reportar erros por número de animal,
+        // mantém os registros correspondentes para nova tentativa.
+        final erros = (body['erros'] as List?)?.cast<String>() ?? const [];
+        for (final erro in erros) {
+          final match = RegExp(r'Animal nº (.+?) ').firstMatch(erro);
+          if (match != null) {
+            final numero = match.group(1)!;
+            for (final r in records.where(
+                (p) => p.payload['animalNumero'] == numero)) {
+              syncedIds.remove(r.id);
+            }
+          }
+        }
+      }
+    } catch (_) {
+      // Sem conexão ou erro — mantém tudo pendente
+    }
+  }
+
+  /// Busca os detalhes de um animal (ciclos, registros, etc.) com retry.
+  Future<AnimalDetail?> fetchAnimalDetail(String animalId, {int maxRetries = 2}) async {
+    for (var attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        final response = await _requestWithRetry(
+          (baseUrl, headers) => http.get(
+            Uri.parse('$baseUrl/api/animals/$animalId'),
+            headers: headers,
+          ),
+        );
+
+        if (response.statusCode == 200) {
+          final body = jsonDecode(response.body) as Map<String, dynamic>;
+          return AnimalDetail.fromJson(body);
+        }
+      } catch (_) {
+        if (attempt == maxRetries) return null;
+      }
+      // Espera um pouco antes de retryar (backoff)
+      if (attempt < maxRetries) {
+        await Future.delayed(Duration(seconds: attempt + 1));
+        resetRediscovery();
+      }
+    }
+    return null;
+  }
+
+  /// Busca os detalhes de TODOS os animais e retorna como mapa.
+  /// Salva cada animal individualmente à medida que obtém sucesso.
+  /// Faz 2 retries para animais que falharam.
+  Future<Map<String, AnimalDetail>> fetchAllAnimalDetails(List<Animal> animals) async {
+    final results = <String, AnimalDetail>{};
+    final failed = <Animal>[];
+
+    // 1ª passada: busca tudo sequencialmente para não sobrecarregar o servidor
+    for (final a in animals) {
+      final detail = await fetchAnimalDetail(a.id, maxRetries: 1);
+      if (detail != null) {
+        results[a.id] = detail;
+      } else {
+        failed.add(a);
+      }
+    }
+
+    // Retry: tenta novamente os que falharam (até 2x)
+    for (var retry = 0; retry < 2 && failed.isNotEmpty; retry++) {
+      resetRediscovery();
+      await Future.delayed(const Duration(seconds: 2));
+      final stillFailed = <Animal>[];
+      for (final a in failed) {
+        final detail = await fetchAnimalDetail(a.id, maxRetries: 1);
+        if (detail != null) {
+          results[a.id] = detail;
+        } else {
+          stillFailed.add(a);
+        }
+      }
+      failed.clear();
+      failed.addAll(stillFailed);
+    }
+
+    return results;
   }
 
   static String newClientId() => const Uuid().v4();

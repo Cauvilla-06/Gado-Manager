@@ -24,7 +24,7 @@ export const Tooltip = dynamic(
 
 export const ResponsiveContainer = dynamic(
   () => import("recharts").then((mod) => mod.ResponsiveContainer),
-  { ssr: false, loading: () => <div className="h-64 bg-muted rounded animate-pulse" /> }
+  { ssr: false }
 );
 
 export const LineChart = dynamic(
@@ -34,6 +34,16 @@ export const LineChart = dynamic(
 
 export const Line = dynamic(
   () => import("recharts").then((mod) => mod.Line),
+  { ssr: false }
+);
+
+export const BarChart = dynamic(
+  () => import("recharts").then((mod) => mod.BarChart),
+  { ssr: false }
+);
+
+export const Bar = dynamic(
+  () => import("recharts").then((mod) => mod.Bar),
   { ssr: false }
 );
 
@@ -49,5 +59,10 @@ export const YAxis = dynamic(
 
 export const CartesianGrid = dynamic(
   () => import("recharts").then((mod) => mod.CartesianGrid),
+  { ssr: false }
+);
+
+export const Legend = dynamic(
+  () => import("recharts").then((mod) => mod.Legend),
   { ssr: false }
 );

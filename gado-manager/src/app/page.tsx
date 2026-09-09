@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useMemo, useCallback } from "react";
 import Link from "next/link";
 import {
   Plus,
@@ -165,14 +165,16 @@ export default function HomePage() {
     loadData();
   }, []);
 
-  const filteredAnimals = animals.filter((a) => {
-    const matchesSearch =
-      !searchQuery ||
-      a.numeroIdentificacao.toLowerCase().includes(searchQuery.toLowerCase());
-    const matchesStatus =
-      filterStatus === "all" || a.status === filterStatus;
-    return matchesSearch && matchesStatus;
-  });
+  const filteredAnimals = useMemo(() => {
+    return animals.filter((a) => {
+      const matchesSearch =
+        !searchQuery ||
+        a.numeroIdentificacao.toLowerCase().includes(searchQuery.toLowerCase());
+      const matchesStatus =
+        filterStatus === "all" || a.status === filterStatus;
+      return matchesSearch && matchesStatus;
+    });
+  }, [animals, searchQuery, filterStatus]);
 
   if (loading) {
     return (

@@ -7,8 +7,9 @@ import '../services/database_helper.dart';
 
 class AddRecordScreen extends StatefulWidget {
   final List<Animal> animals;
+  final Animal? preSelectedAnimal;
 
-  const AddRecordScreen({super.key, required this.animals});
+  const AddRecordScreen({super.key, required this.animals, this.preSelectedAnimal});
 
   @override
   State<AddRecordScreen> createState() => _AddRecordScreenState();
@@ -20,6 +21,14 @@ class _AddRecordScreenState extends State<AddRecordScreen> {
 
   Animal? _selectedAnimal;
   RecordType _tipo = RecordType.pesagem;
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.preSelectedAnimal != null) {
+      _selectedAnimal = widget.preSelectedAnimal;
+    }
+  }
 
   // Campos dinâmicos
   final _pesoCtrl = TextEditingController();
@@ -177,9 +186,11 @@ class _AddRecordScreenState extends State<AddRecordScreen> {
             ),
             const SizedBox(height: 20),
 
-            // Seletor de tipo
+            // Seletor de tipo (cadastro é feito pela tela separada)
             SegmentedButton<RecordType>(
-              segments: RecordType.values.map((t) {
+              segments: RecordType.values
+                  .where((t) => t != RecordType.cadastro)
+                  .map((t) {
                 IconData icon;
                 switch (t) {
                   case RecordType.pesagem:

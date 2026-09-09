@@ -46,7 +46,8 @@ class _AuthGateState extends State<_AuthGate> {
   }
 
   Future<void> _checkAuth() async {
-    final loggedIn = await AuthService().isLoggedIn;
+    final auth = AuthService();
+    final loggedIn = await auth.isLoggedIn;
     if (!mounted) return;
 
     if (!loggedIn) {
@@ -55,12 +56,22 @@ class _AuthGateState extends State<_AuthGate> {
     }
 
     // Check if user has a saved farm selection
-    final auth = AuthService();
     final savedFarmId = await auth.selectedFarmId;
 
     if (savedFarmId != null) {
-      // Has a saved farm — go to home
+      // Has a saved farm — try to reach server, then go to home
       setState(() => _loggedIn = true);
+
+      // Auto-reconnect: tenta alcançar o servidor na background.
+      // fetchFarms agora tem auto-retry com rediscovery, então
+      // se a URL do tunnel mudou, ele busca a mais recente.
+      try {
+        final api = ApiService(auth);
+        await api.fetchFarms();
+        api.resetRediscovery();
+      } catch (_) {
+        // Servidor offline ou URL obsoleta — app funciona offline
+      }
     } else {
       // No saved farm — check farms and show selection if needed
       setState(() {
