@@ -154,21 +154,8 @@ if "!USE_TUNNEL!"=="1" (
         echo   ========================================
         echo.
 
-        :: Salva via API
-        set "BODY_FILE=%TEMP%\gado-body.json"
-        >"!BODY_FILE!" echo {"url":"!TUNNEL_URL!"}
-        curl -s -X POST http://localhost:3000/api/config/server-url -H "Content-Type: application/json" -d @"!BODY_FILE!" >nul 2>&1
-
-        if !errorlevel! equ 0 (
-            echo [TUNEL] [OK] URL salva no servidor!
-        ) else (
-            echo [TUNEL] Salvando direto no arquivo...
-            if not exist "!PROJECT!.runtime-config" mkdir "!PROJECT!.runtime-config"
-            >"!PROJECT!.runtime-config\server-url.json" echo {"url":"!TUNNEL_URL!","updatedAt":"%date%T%time%"}
-            echo [TUNEL] [OK] URL salva no arquivo.
-        )
-
-        if exist "!BODY_FILE!" del "!BODY_FILE!"
+        :: A URL ja foi gravada em .runtime-config\server-url.json pelo extract-tunnel-url.ps1
+        echo [TUNEL] [OK] URL salva para o app.
 
         :: Inicia monitor
         if exist "!PROJECT!scripts\capture-tunnel-url.ps1" (

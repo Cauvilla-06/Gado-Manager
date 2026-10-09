@@ -1,27 +1,20 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getGeneralReport } from "@/services/report-service";
-import { getCurrentFarm } from "@/lib/farm";
+import { requireFarm } from "@/lib/farm";
+import { apiHandler } from "@/lib/api-errors";
+import { animalStatusFilterSchema } from "@/lib/validations";
 
-export async function GET(request: NextRequest) {
-  try {
-    const { farm } = await getCurrentFarm();
-    if (!farm) {
-      return NextResponse.json({ error: "Nenhuma fazenda encontrada" }, { status: 404 });
-    }
+export const GET = apiHandler(async (request: NextRequest) => {
+  const { farm } = await requireFarm();
 
-    const { searchParams } = new URL(request.url);
-    const status = searchParams.get("status") || undefined;
-    const periodDays = searchParams.get("periodDays")
-      ? parseInt(searchParams.get("periodDays")!)
-      : undefined;
+  const { searchParams } = new URL(request.url);
+  const status = animalStatusFilterSchema.parse(searchParams.get("status") || undefined);
+  const periodParam = searchParams.get("periodDays");
+  const periodDays = periodParam ? parseInt(periodParam, 10) : undefined;
 
-    const report = await getGeneralReport(farm.id, { status, periodDays });
-    return NextResponse.json(report);
-  } catch (error) {
-    console.error("Error generating general report:", error);
-    return NextResponse.json(
-      { error: "Erro ao gerar relatório geral" },
-      { status: 500 }
-    );
-  }
-}
+  const report = await getGeneralReport(farm.id, {
+    status,
+    periodDays: Number.isFinite(periodDays) ? periodDays : undefined,
+  });
+  return NextResponse.json(report);
+});

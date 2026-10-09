@@ -8,19 +8,22 @@ import {
   generateInterpretation,
 } from "@/lib/calculations";
 import type { IndividualReport } from "@/types";
+import { NotFoundError } from "@/lib/api-errors";
 
 export async function getIndividualReport(animalId: string, cicloId?: string): Promise<IndividualReport> {
   const animal = await db.animal.findUnique({ where: { id: animalId } });
-  if (!animal) throw new Error("Animal não encontrado");
+  if (!animal) throw new NotFoundError("Animal");
 
+  // O ciclo pedido precisa ser DESTE animal: sem isso, um cicloId de outra
+  // fazenda vazaria os registros dela no relatório (IDOR).
   const cycle = cicloId
-    ? await db.animalCycle.findUnique({ where: { id: cicloId } })
+    ? await db.animalCycle.findFirst({ where: { id: cicloId, animalId } })
     : await db.animalCycle.findFirst({
         where: { animalId, status: "ATIVO" },
         orderBy: { numeroCiclo: "desc" },
       });
 
-  if (!cycle) throw new Error("Ciclo não encontrado");
+  if (!cycle) throw new NotFoundError("Ciclo");
 
   // Parallel query: fetch all data for this cycle in a single batch
   const [pesagens, vacinas, vermifugos, vitaminas] = await Promise.all([

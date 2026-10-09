@@ -76,3 +76,51 @@ Corrigido em código e **verificado por re-ataque**: IDOR, roles, bypass de apro
 - Ataques re-executados: IDOR ×3 endpoints, roles MEMBER (pesagem/venda/criação/leitura), registro com farmCode alheio (aprovação verificada), brute-force com 6+ IPs forjados (por-conta), config remota/local, XSS/SQLi/SSTI, duplicado, periodDays, CORS, health
 - `npm test` **60/60** ✅ · `npm run lint` **0 erros** ✅ · `npx tsc --noEmit` ✅
 - Contas de teste da revisão: **apagadas** (verificado: 0 restantes); `server-url.json` restaurado
+
+---
+
+## 7. Revisão de 09/10/2026 — falhas que a auditoria anterior deu como fechadas
+
+Revisão independente do código encontrou caminhos que contornavam as correções
+acima. Todos foram corrigidos e **verificados contra o servidor rodando** (roteiro
+de 48 ataques/regressões, todos passando) + testes unitários (60 → 83).
+
+### Decisão de produto: permissões (substitui a semântica da 1.3)
+MEMBER **lança registros de manejo** (pesagem, vacina, vermífugo, vitamina) pelo
+site e pelo app; **não** cadastra/exclui/vende boi nem inicia ciclo. Antes, o site
+bloqueava o MEMBER, mas o `/api/sync` deixava passar sem checar nada.
+Helper novo: `userCanRecordInFarm()`; `userCanWriteToFarm()` segue para gestão do rebanho.
+
+| # | Falha encontrada | Correção |
+|---|---|---|
+| 7.1 | `/api/sync` sem checagem de nível, sem filtro XSS, sem limite de tamanho/requisições, aceitava `cicloId` de **outra fazenda** e animal vendido, vazava `error.message` | Validação por registro (recusados voltam em `rejeitados` e ficam pendentes no app), ciclo precisa ser do animal e ativo, animal precisa estar ATIVO, máx. 500/tipo, rate limit por usuário, `criadoPorId` gravado, erros genéricos |
+| 7.2 | Vermífugo/vitamina sem Zod, sem XSS, sem checar ciclo/animal vendido; data inválida → 500 | `vermifugeSchema`/`vitaminSchema` + `assertCanRecord()` compartilhado com pesagem/vacina |
+| 7.3 | **IDOR** em `/api/animals/:id/report?cicloId=` (ciclo de outra fazenda vazava registros) | Ciclo buscado com `{ id, animalId }` |
+| 7.4 | Idempotência por `clientGeneratedId` devolvia registro de **outro animal** | `resolveExisting()` recusa (409) |
+| 7.5 | `POST /api/config/*` aceitava qualquer um na **rede local** → redirecionar o app para servidor falso | Rotas POST removidas; scripts gravam o arquivo direto; GET só devolve URL `https://` |
+| 7.6 | App Flutter enviava **e-mail e senha por HTTP** a IPs fixos em qualquer Wi-Fi; aceitava qualquer URL devolvida | Login só na URL do campo; sem IPs de roteador; só aceita túnel `https://`; sondagem da rede só quando o usuário pede |
+| 7.7 | Login paralelo do **NextAuth** (`/api/auth/callback/credentials`) sem rate limit — força bruta por fora | NextAuth removido (não era usado) |
+| 7.8 | Segredo JWT de exemplo (público no repo) era aceito → qualquer um forjaria login | Servidor recusa o valor de exemplo e segredos < 32 caracteres |
+| 7.9 | Token de 30 dias sem revogação (era 2.3 pendente) | `User.tokenVersion` + "Sair de todos os dispositivos" (menu do site / `todosDispositivos` no logout) |
+| 7.10 | `criadoPorId` descartado pelo Zod em pesagem/vacina | Incluído nos schemas |
+| 7.11 | Erros 500 em: vender 2×, ciclo de animal inexistente, aprovar pedido 2×, data/status inválido, JSON malformado, e-mail não-texto no login | 400/404/409 com mensagem clara; aprovação em transação e só de pedido PENDENTE |
+| 7.12 | E-mail com maiúscula virava outra conta | E-mail normalizado no cadastro/login; contas antigas encontradas sem diferenciar caixa |
+| 7.13 | Pedido de entrada sem limite (spam/enumeração de códigos) | Rate limit 5/10 min + validação; código de fazenda novo com 10 hex (`crypto`) |
+| 7.14 | Boi ATIVO duplicado em cadastros simultâneos | Índice único parcial `(farmId, numeroIdentificacao) WHERE status='ATIVO'` |
+| 7.15 | Export **CSV** sem aspas e com risco de fórmula (`=...`) ao abrir no Excel | `lib/csv.ts`: aspas, neutralização de fórmula, BOM UTF-8 |
+| 7.16 | `xlsx` 0.18.5 (Prototype Pollution/ReDoS, sem fix no npm) | SheetJS 0.20.3 (distribuição oficial cdn.sheetjs.com) |
+| 7.17 | Seed com `demo@gado.com / 123456`, podendo rodar no Turso | Seed recusa banco remoto sem `SEED_ALLOW_REMOTE=1`; senha aleatória ou `SEED_DEMO_PASSWORD` |
+| 7.18 | Headers `x-user-*` vindos do cliente não eram descartados | Proxy remove antes de tudo |
+
+### Pendências conhecidas (decisão do dono / infra)
+- **9 vulnerabilidades "high" no `npm audit`**: todas em ferramentas de desenvolvimento
+  (`eslint-config-next` → braces/micromatch; CLI do `prisma` → mysql2/deepmerge-ts),
+  não no código que roda para o usuário. O "fix" sugerido pelo npm é **rebaixar**
+  (eslint-config-next 14 / prisma 6) — não aplicar; aguardar versões novas.
+- **Rate limit em memória** zera ao reiniciar e vale por processo. Atrás do túnel,
+  o IP vem do `cf-connecting-ip` (confiável); acesso direto pela rede local pode
+  forjar esse header e contornar o limite por IP (o limite por e-mail no login segue valendo).
+- **App Flutter**: token salvo em `SharedPreferences` (sem criptografia) e HTTP liberado
+  para a rede local (`usesCleartextTraffic`) — aceitável em desenvolvimento; para
+  produção, usar `flutter_secure_storage` e só HTTPS.
+- Histórico do git ainda contém um `dev.db` antigo (só dados demo).

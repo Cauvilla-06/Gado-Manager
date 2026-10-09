@@ -1,6 +1,6 @@
 import { db } from "@/lib/db";
 import { vaccinationSchema } from "@/lib/validations";
-import { ConflictError, ValidationError } from "@/lib/api-errors";
+import { assertCanRecord, resolveExisting } from "@/services/record-guards";
 import { z } from "zod";
 
 type VaccinationInput = z.infer<typeof vaccinationSchema>;
@@ -13,24 +13,20 @@ export async function createVaccination(data: VaccinationInput) {
     const existing = await db.vaccination.findUnique({
       where: { clientGeneratedId: validated.clientGeneratedId },
     });
-    if (existing) return existing;
+    const reused = resolveExisting(existing, validated.animalId);
+    if (reused) return reused;
   }
 
   // Atomic: validate + create + update timestamp
   return db.$transaction(async (tx) => {
-    const animal = await tx.animal.findUnique({ where: { id: validated.animalId } });
-    if (!animal) throw new ValidationError("Animal não encontrado");
-    if (animal.status === "VENDIDO") throw new ConflictError("Animal já foi vendido");
-
-    const cycle = await tx.animalCycle.findUnique({ where: { id: validated.cicloId } });
-    if (!cycle || cycle.animalId !== validated.animalId) throw new ValidationError("Ciclo não encontrado para este animal");
-    if (cycle.status !== "ATIVO") throw new ConflictError("Este ciclo já está encerrado");
+    await assertCanRecord(tx, validated.animalId, validated.cicloId);
 
     const [record] = await Promise.all([
       tx.vaccination.create({
         data: {
           animalId: validated.animalId,
           cicloId: validated.cicloId,
+          criadoPorId: validated.criadoPorId,
           nomeVacina: validated.nomeVacina,
           dataAplicacao: new Date(validated.dataAplicacao),
           dataProximaDose: validated.dataProximaDose

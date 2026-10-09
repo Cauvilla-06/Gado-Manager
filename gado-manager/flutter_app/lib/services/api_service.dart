@@ -36,6 +36,11 @@ class SyncResultSummary {
 }
 
 class AuthService {
+  /// IP do PC servidor na rede local (Wi-Fi da fazenda/escritório).
+  /// Usado só para DESCOBRIR o servidor; a senha nunca é enviada para cá
+  /// automaticamente.
+  static const lanServerUrl = 'http://192.168.1.175:3000';
+
   static const _kServerUrl = 'server_url';
   static const _kSelectedFarmId = 'selected_farm_id';
   static const _kSelectedFarmName = 'selected_farm_name';
@@ -94,19 +99,21 @@ class AuthService {
   ///
   /// Prioridade:
   /// 1. Tenta a URL salva (pode ser um tunnel ativo)
-  /// 2. Sonda os candidatos locais EM PARALELO e usa o primeiro acessível
+  /// 2. Se [allowLocalProbe], sonda os candidatos locais EM PARALELO e usa o
+  ///    primeiro acessível
   ///
-  /// Quando encontra o servidor local, busca automaticamente a URL
-  /// atualizada do Cloudflare Tunnel e salva para uso futuro.
-  Future<String?> discoverServerUrl() async {
+  /// Quando encontra o servidor, busca automaticamente a URL atualizada do
+  /// Cloudflare Tunnel e salva para uso futuro.
+  ///
+  /// Segurança: a sondagem local fala HTTP sem criptografia com endereços da
+  /// rede onde o celular estiver. Por isso ela só roda quando o USUÁRIO pede
+  /// (tela de login / botão "Reconectar"), nunca em segundo plano com o token.
+  Future<String?> discoverServerUrl({bool allowLocalProbe = true}) async {
     const candidates = [
-      'http://10.0.2.2:3000',      // Android emulator
-      'http://localhost:3000',      // Same machine
-      'http://127.0.0.1:3000',     // Same machine
-      'http://192.168.1.175:3000',  // PC local network IP
-      'http://192.168.0.1:3000',   // Common gateway
-      'http://192.168.1.1:3000',   // Common gateway
-      'http://10.0.0.1:3000',      // Common gateway
+      'http://10.0.2.2:3000', // Android emulator
+      'http://localhost:3000', // Same machine
+      'http://127.0.0.1:3000', // Same machine
+      lanServerUrl, // PC na rede local
     ];
 
     // 1. Tenta a URL salva primeiro (pode ser tunnel ativo)
@@ -115,14 +122,15 @@ class AuthService {
       if (await pingServer(savedUrl)) {
         // Atualiza a URL salva se o tunnel mudou
         final tunnelUrl = await _fetchTunnelUrlFrom(savedUrl);
-        if (tunnelUrl != null && tunnelUrl.isNotEmpty &&
-            tunnelUrl != savedUrl) {
+        if (tunnelUrl != null && tunnelUrl != savedUrl) {
           await setServerUrl(tunnelUrl);
           return tunnelUrl;
         }
         return savedUrl;
       }
     }
+
+    if (!allowLocalProbe) return null;
 
     // 2. Sonda os candidatos locais em paralelo — muito mais rápido que
     //    testar um por um (que podia levar ~20s quando tudo falhava).
@@ -145,14 +153,14 @@ class AuthService {
     final best = reachable.firstWhere(
       (c) => c == 'http://10.0.2.2:3000',
       orElse: () => reachable.firstWhere(
-        (c) => c == 'http://192.168.1.175:3000',
+        (c) => c == lanServerUrl,
         orElse: () => reachable.first,
       ),
     );
 
     // Achou o servidor local — busca a URL mais recente do tunnel
     final tunnelUrl = await _fetchTunnelUrlFrom(best);
-    if (tunnelUrl != null && tunnelUrl.isNotEmpty) {
+    if (tunnelUrl != null) {
       await setServerUrl(tunnelUrl);
       return tunnelUrl;
     }
@@ -169,7 +177,9 @@ class AuthService {
           .timeout(const Duration(seconds: 3));
       if (response.statusCode == 200) {
         final body = jsonDecode(response.body) as Map<String, dynamic>;
-        return (body['url'] as String?)?.trim();
+        final url = (body['url'] as String?)?.trim();
+        // Só aceita endereço com HTTPS; qualquer outra coisa é ignorada
+        if (url != null && url.startsWith('https://')) return url;
       }
     } catch (_) {
       // Sem info de tunnel disponível
@@ -205,11 +215,12 @@ class AuthService {
 
   /// Faz login no servidor e guarda o token JWT.
   ///
-  /// Tenta na URL informada. Se falhar por CONEXÃO (tunnel morto, servidor
-  /// offline), tenta automaticamente os endereços locais. Erros de
-  /// credenciais (401/400/429) são lançados imediatamente — sem fallback,
-  /// para o usuário ver a mensagem real em vez de
-  /// "Não foi possível conectar".
+  /// Envia as credenciais SOMENTE para a URL informada pelo usuário.
+  /// (Antes, em falha de conexão, o app tentava logar sozinho em endereços
+  /// locais via HTTP — o que mandava a senha sem criptografia para qualquer
+  /// aparelho com aquele IP na rede onde o celular estivesse.)
+  /// Para achar o servidor, a tela de login usa [discoverServerUrl], que só
+  /// preenche o campo — o usuário confere e toca em Entrar.
   Future<String> login(String url, String email, String password) async {
     final base = normalizeUrl(url);
 
@@ -219,39 +230,12 @@ class AuthService {
     } on AuthError {
       rethrow; // credenciais/rate-limit — mostra a mensagem real
     } catch (_) {
-      // Falha de conexão na URL informada — tenta endereços locais
+      // Falha de conexão na URL informada
     }
 
-    final localCandidates = [
-      'http://10.0.2.2:3000',      // Android emulator
-      'http://localhost:3000',      // Same machine
-      'http://127.0.0.1:3000',     // Same machine
-      'http://192.168.1.175:3000',  // PC local network IP
-    ];
-
-    for (final candidate in localCandidates) {
-      if (candidate == base) continue; // já tentou
-      try {
-        final result = await _tryLogin(candidate, email, password);
-        if (result != null) {
-          // Achou o servidor local — salva a URL do tunnel se houver
-          final tunnelUrl = await _fetchTunnelUrlFrom(candidate);
-          if (tunnelUrl != null && tunnelUrl.isNotEmpty) {
-            await setServerUrl(tunnelUrl);
-            return tunnelUrl;
-          }
-          await setServerUrl(candidate);
-          return candidate;
-        }
-      } on AuthError {
-        rethrow; // servidor local respondeu, mas credenciais inválidas
-      } catch (_) {
-        // Próximo candidato
-      }
-    }
-
-    throw AuthError('Não foi possível conectar ao servidor. '
-        'Verifique se o servidor está rodando e tente novamente.');
+    throw AuthError('Não foi possível conectar a $base.\n'
+        'Verifique se o servidor está rodando ou toque na lupa '
+        'para procurar o servidor.');
   }
 
   /// Tenta fazer login em uma URL específica. Retorna null se falhar.
@@ -370,7 +354,9 @@ class ApiService {
       // Primeira tentativa falhou — tenta rediscover
       if (_rediscovered) rethrow;
 
-      final newUrl = await auth.discoverServerUrl();
+      // Em segundo plano só atualiza a partir do servidor já salvo (que o
+      // usuário confirmou) — não sai sondando a rede com o token.
+      final newUrl = await auth.discoverServerUrl(allowLocalProbe: false);
       if (newUrl != null && newUrl != baseUrl) {
         _rediscovered = true;
         final newHeaders = await _headers();
@@ -620,7 +606,21 @@ class ApiService {
           syncedIds.add(r.id);
         }
 
-        // Se o servidor reportar erros por número de animal,
+        // Registros recusados pelo servidor (dados inválidos, animal vendido,
+        // ciclo errado...) ficam pendentes para o usuário corrigir.
+        final rejeitados =
+            ((body['rejeitados'] as List?) ?? const []).whereType<String>().toSet();
+        if (rejeitados.isNotEmpty) {
+          for (final r in records) {
+            if (rejeitados.contains(r.payload['clientGeneratedId'])) {
+              syncedIds.remove(r.id);
+            }
+          }
+          return;
+        }
+
+        // Compatibilidade com servidores antigos (sem `rejeitados`):
+        // se o servidor reportar erros por número de animal,
         // mantém os registros correspondentes para nova tentativa.
         final erros = (body['erros'] as List?)?.cast<String>() ?? const [];
         for (final erro in erros) {

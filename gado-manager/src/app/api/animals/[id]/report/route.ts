@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getIndividualReport } from "@/services/report-service";
-import { apiHandler, NotFoundError, ForbiddenError } from "@/lib/api-errors";
-import { getCurrentFarm } from "@/lib/farm";
+import { apiHandler, ForbiddenError } from "@/lib/api-errors";
+import { requireFarm } from "@/lib/farm";
 import { animalBelongsToFarm } from "@/lib/ownership";
 
 interface RouteContext {
@@ -10,10 +10,7 @@ interface RouteContext {
 
 export const GET = apiHandler<RouteContext>(async (request: NextRequest, context) => {
   const { id } = await context.params;
-  const { farm } = await getCurrentFarm();
-  if (!farm) {
-    throw new NotFoundError("Nenhuma fazenda encontrada");
-  }
+  const { farm } = await requireFarm();
 
   // IDOR: animal precisa pertencer à fazenda do usuário
   const belongs = await animalBelongsToFarm(id, farm.id);

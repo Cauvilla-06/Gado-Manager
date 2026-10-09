@@ -1,11 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getCurrentFarm } from "@/lib/farm";
+import { requireFarm } from "@/lib/farm";
 import {
   createVermifuge,
   getVermifugesByAnimal,
 } from "@/services/vermifuge-service";
-import { apiHandler, ForbiddenError, NotFoundError } from "@/lib/api-errors";
-import { animalBelongsToFarm, userCanWriteToFarm } from "@/lib/ownership";
+import { apiHandler, ForbiddenError } from "@/lib/api-errors";
+import { animalBelongsToFarm, userCanRecordInFarm } from "@/lib/ownership";
 
 interface RouteContext {
   params: Promise<{ id: string }>;
@@ -13,10 +13,7 @@ interface RouteContext {
 
 export const GET = apiHandler<RouteContext>(async (request: NextRequest, context) => {
   const { id } = await context.params;
-  const { farm } = await getCurrentFarm();
-  if (!farm) {
-    throw new NotFoundError("Nenhuma fazenda encontrada");
-  }
+  const { farm } = await requireFarm();
 
   // IDOR: animal precisa pertencer à fazenda do usuário
   const belongs = await animalBelongsToFarm(id, farm.id);
@@ -33,10 +30,7 @@ export const GET = apiHandler<RouteContext>(async (request: NextRequest, context
 export const POST = apiHandler<RouteContext>(async (request: NextRequest, context) => {
   const { id } = await context.params;
   const body = await request.json();
-  const { user, farm } = await getCurrentFarm();
-  if (!farm || !user) {
-    throw new NotFoundError("Nenhuma fazenda encontrada");
-  }
+  const { user, farm } = await requireFarm();
 
   // Ownership validation
   const belongs = await animalBelongsToFarm(id, farm.id);
@@ -44,9 +38,9 @@ export const POST = apiHandler<RouteContext>(async (request: NextRequest, contex
     throw new ForbiddenError("Este animal não pertence a esta fazenda");
   }
 
-  // Role validation: MEMBER é somente leitura
-  const canWrite = await userCanWriteToFarm(user.id, farm.id);
-  if (!canWrite) {
+  // OWNER, ADMIN e MEMBER podem lançar registros de manejo
+  const canRecord = await userCanRecordInFarm(user.id, farm.id);
+  if (!canRecord) {
     throw new ForbiddenError("Seu nível de acesso não permite registrar vermífugos");
   }
 

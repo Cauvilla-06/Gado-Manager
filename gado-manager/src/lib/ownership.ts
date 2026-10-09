@@ -32,8 +32,28 @@ export async function cycleBelongsToAnimal(
 }
 
 /**
- * Verifica se o usuário tem permissão de escrita na fazenda.
- * OWNER e ADMIN podem escrever. MEMBER só lê.
+ * Verifica se o usuário pode lançar registros de manejo na fazenda
+ * (pesagem, vacina, vermífugo, vitamina) — pelo site ou pelo app.
+ * OWNER, ADMIN e MEMBER podem; quem registrou fica salvo em `criadoPorId`.
+ */
+export async function userCanRecordInFarm(
+  userId: string,
+  farmId: string
+): Promise<boolean> {
+  const membership = await db.farmMembership.findFirst({
+    where: { userId, farmId },
+    select: { role: true },
+  });
+
+  if (!membership) return false;
+
+  return ["OWNER", "ADMIN", "MEMBER"].includes(membership.role);
+}
+
+/**
+ * Verifica se o usuário pode gerenciar o rebanho na fazenda
+ * (cadastrar/excluir/vender animal, iniciar ciclo).
+ * Só OWNER e ADMIN. MEMBER apenas lança registros de manejo.
  */
 export async function userCanWriteToFarm(
   userId: string,

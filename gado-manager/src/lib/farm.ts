@@ -1,5 +1,6 @@
 import { headers } from "next/headers";
 import { db } from "@/lib/db";
+import { AppError, UnauthorizedError } from "@/lib/api-errors";
 
 /**
  * Get the current user's active farm.
@@ -14,14 +15,18 @@ export async function getCurrentFarm() {
       return { user: null, farm: null, membership: null };
     }
 
-    const user = await db.user.findUnique({
+    const found = await db.user.findUnique({
       where: { id: userId },
-      select: { id: true, name: true, email: true },
+      select: { id: true, name: true, email: true, tokenVersion: true },
     });
 
-    if (!user) {
+    // Token emitido antes de um "sair de todos os dispositivos" não vale mais
+    const tokenVersion = Number(h.get("x-token-version") ?? "0");
+    if (!found || found.tokenVersion !== tokenVersion) {
       return { user: null, farm: null, membership: null };
     }
+
+    const user = { id: found.id, name: found.name, email: found.email };
 
     // Check if user has selected a specific farm via cookie
     let membership;
@@ -108,4 +113,28 @@ export async function isFarmOwner(userId: string, farmId: string): Promise<boole
   });
 
   return membership?.role === "OWNER";
+}
+
+/**
+ * Para rotas de API: exige usuário autenticado (401) e fazenda ativa (404).
+ * Lança AppError — use dentro de apiHandler.
+ */
+export async function requireFarm() {
+  const { user, farm, membership } = await getCurrentFarm();
+  if (!user) {
+    throw new UnauthorizedError("Sessão expirada. Faça login novamente.");
+  }
+  if (!farm || !membership) {
+    throw new AppError("Nenhuma fazenda encontrada", 404, "NOT_FOUND");
+  }
+  return { user, farm, membership };
+}
+
+/** Para rotas de API que só precisam do usuário autenticado (401). */
+export async function requireUser() {
+  const { user } = await getCurrentFarm();
+  if (!user) {
+    throw new UnauthorizedError("Sessão expirada. Faça login novamente.");
+  }
+  return user;
 }

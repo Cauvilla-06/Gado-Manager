@@ -1,13 +1,10 @@
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { getCurrentFarm } from "@/lib/farm";
-import { apiHandler, NotFoundError } from "@/lib/api-errors";
+import { requireFarm } from "@/lib/farm";
+import { apiHandler } from "@/lib/api-errors";
 
 export const GET = apiHandler(async () => {
-  const { farm } = await getCurrentFarm();
-  if (!farm) {
-    throw new NotFoundError("Nenhuma fazenda encontrada");
-  }
+  const { farm } = await requireFarm();
 
   // Use a single query to aggregate everything we need
   const [stats, animalsSummary] = await Promise.all([

@@ -1,5 +1,5 @@
 # capture-tunnel-url.ps1
-# Watches cloudflared output log and saves tunnel URL to the server.
+# Watches cloudflared output log and saves tunnel URL to .runtime-config/server-url.json.
 # Called by start-server.bat / start-gadomanager.bat
 #
 # IMPORTANT: cloudflared can restart and append a NEW URL to the log.
@@ -7,7 +7,6 @@
 
 param(
     [string]$LogFile = "$env:TEMP\cloudflared_output.log",
-    [string]$ApiUrl = "http://localhost:3000/api/config/server-url",
     [int]$MaxRetries = 30,
     [int]$PollSeconds = 2
 )
@@ -24,22 +23,12 @@ function Get-LastTunnelUrl {
     return $null
 }
 
+# Grava a URL direto no arquivo lido pelo servidor (.runtime-config/server-url.json).
+# Nao existe mais POST na API para isso: so quem tem acesso ao disco do PC troca a URL.
 function Save-Url {
-    param([string]$Url, [string]$ApiUrl)
+    param([string]$Url)
     try {
-        $body = @{ url = $Url } | ConvertTo-Json
-        $response = Invoke-RestMethod -Uri $ApiUrl -Method Post -ContentType "application/json" -Body $body -TimeoutSec 5
-        if ($response.success) {
-            Write-Host "[OK] URL salva no servidor: $Url"
-            return $true
-        }
-    } catch {
-        Write-Host "[INFO] API nao disponivel, salvando no arquivo..."
-    }
-    
-    # Fallback: write directly to file
-    try {
-        $configDir = Join-Path (Get-Location) ".runtime-config"
+        $configDir = Join-Path (Split-Path -Parent $PSScriptRoot) ".runtime-config"
         if (-not (Test-Path $configDir)) {
             New-Item -ItemType Directory -Path $configDir -Force | Out-Null
         }
@@ -89,7 +78,7 @@ while ($retries -lt $MaxRetries) {
             Write-Host "============================================"
             Write-Host ""
 
-            Save-Url -Url $url -ApiUrl $ApiUrl | Out-Null
+            Save-Url -Url $url | Out-Null
         }
     } catch {
         # Log might be locked, retry
@@ -117,7 +106,7 @@ while ($true) {
             $lastUrl = $newUrl
             Write-Host ""
             Write-Host "[INFO] Tunnel mudou! Nova URL: $newUrl"
-            Save-Url -Url $newUrl -ApiUrl $ApiUrl | Out-Null
+            Save-Url -Url $newUrl | Out-Null
         }
     } catch {
         # Log might be temporarily locked

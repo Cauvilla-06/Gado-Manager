@@ -89,8 +89,10 @@ export const RATE_LIMITS = {
   register: { windowMs: 5 * 60 * 1000, maxRequests: 3 },
   /** API geral: 100 requisições por minuto */
   api: { windowMs: 60 * 1000, maxRequests: 100 },
-  /** Sync: 10 payloads por minuto */
-  sync: { windowMs: 60 * 1000, maxRequests: 10 },
+  /** Sync: 60 payloads por minuto por usuário (o app envia um POST por lote/animal) */
+  sync: { windowMs: 60 * 1000, maxRequests: 60 },
+  /** Pedidos de entrada em fazenda: 5 a cada 10 minutos */
+  farmJoin: { windowMs: 10 * 60 * 1000, maxRequests: 5 },
 } as const;
 
 /**

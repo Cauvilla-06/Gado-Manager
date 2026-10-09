@@ -8,7 +8,8 @@
     "start": "next start",
     "lint": "eslint",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "postinstall": "prisma generate"
   },
   "dependencies": {
     "@hookform/resolvers": "^5.9.1",
@@ -25,14 +26,13 @@
     "jwt-decode": "^4.0.0",
     "lucide-react": "^1.33.0",
     "next": "^16.4.0",
-    "next-auth": "^4.24.15",
     "prisma": "^7.9.1",
     "react": "19.2.8",
     "react-dom": "19.2.8",
     "react-hook-form": "^7.86.0",
     "recharts": "^3.10.1",
     "uuid": "^14.0.2",
-    "xlsx": "^0.18.5",
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz",
     "zod": "^4.4.3",
     "zustand": "^5.0.15"
   },

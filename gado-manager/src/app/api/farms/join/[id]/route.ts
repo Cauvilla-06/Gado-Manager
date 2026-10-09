@@ -1,72 +1,58 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getCurrentFarm } from "@/lib/farm";
+import { requireUser } from "@/lib/farm";
 import { db } from "@/lib/db";
+import {
+  apiHandler,
+  ConflictError,
+  ForbiddenError,
+  NotFoundError,
+  } from "@/lib/api-errors";
+import { handleJoinRequestSchema } from "@/lib/validations";
 
-// Approve or reject a join request
-export async function PATCH(request: NextRequest) {
-  try {
-    const { user } = await getCurrentFarm();
-    if (!user) {
-      return NextResponse.json({ error: "Não autenticado" }, { status: 401 });
-    }
+interface RouteContext {
+  params: Promise<{ id: string }>;
+}
 
-    const { requestId, action } = await request.json();
+// Aprovar ou rejeitar um pedido de entrada (PATCH /api/farms/join/:id)
+export const PATCH = apiHandler<RouteContext>(async (request: NextRequest, context) => {
+  const user = await requireUser();
 
-    if (!requestId || !["APROVADO", "REJEITADO"].includes(action)) {
-      return NextResponse.json(
-        { error: "Dados inválidos" },
-        { status: 400 }
-      );
-    }
+  const { id: requestId } = await context.params;
+  const { action } = handleJoinRequestSchema.parse(await request.json());
 
-    // Get the request
-    const joinRequest = await db.farmRequest.findUnique({
-      where: { id: requestId },
-      include: { farm: true },
-    });
-
+  await db.$transaction(async (tx) => {
+    const joinRequest = await tx.farmRequest.findUnique({ where: { id: requestId } });
     if (!joinRequest) {
-      return NextResponse.json(
-        { error: "Pedido não encontrado" },
-        { status: 404 }
-      );
+      throw new NotFoundError("Pedido");
     }
 
-    // Verify user is OWNER or ADMIN of this farm
-    const membership = await db.farmMembership.findUnique({
+    // Só OWNER/ADMIN da fazenda do pedido podem decidir
+    const membership = await tx.farmMembership.findUnique({
       where: { userId_farmId: { userId: user.id, farmId: joinRequest.farmId } },
     });
-
     if (!membership || !["OWNER", "ADMIN"].includes(membership.role)) {
-      return NextResponse.json(
-        { error: "Sem permissão para gerenciar pedidos" },
-        { status: 403 }
-      );
+      throw new ForbiddenError("Sem permissão para gerenciar pedidos");
     }
 
-    // Update request status
-    await db.farmRequest.update({
+    // Pedido já decidido não pode ser decidido de novo (evita 500 por membership duplicada)
+    if (joinRequest.status !== "PENDENTE") {
+      throw new ConflictError("Este pedido já foi respondido");
+    }
+
+    await tx.farmRequest.update({
       where: { id: requestId },
       data: { status: action },
     });
 
-    // If approved, create membership
     if (action === "APROVADO") {
-      await db.farmMembership.create({
-        data: {
-          userId: joinRequest.userId,
-          farmId: joinRequest.farmId,
-          role: "MEMBER",
-        },
+      // upsert: se a pessoa já virou membro por outro caminho, não quebra
+      await tx.farmMembership.upsert({
+        where: { userId_farmId: { userId: joinRequest.userId, farmId: joinRequest.farmId } },
+        update: {},
+        create: { userId: joinRequest.userId, farmId: joinRequest.farmId, role: "MEMBER" },
       });
     }
+  });
 
-    return NextResponse.json({ success: true });
-  } catch (error) {
-    console.error("Handle request error:", error);
-    return NextResponse.json(
-      { error: "Erro ao processar pedido" },
-      { status: 500 }
-    );
-  }
-}
+  return NextResponse.json({ success: true });
+});

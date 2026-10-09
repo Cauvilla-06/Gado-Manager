@@ -136,47 +136,6 @@ export interface IndividualReport {
 }
 
 // Sync
-export interface SyncPayload {
-  pesagens: Array<{
-    clientGeneratedId: string;
-    animalNumero: string;
-    pesoKg: number;
-    dataPesagem: string;
-    cicloId?: string;
-    observacao?: string;
-  }>;
-  vacinas: Array<{
-    clientGeneratedId: string;
-    animalNumero: string;
-    nomeVacina: string;
-    dataAplicacao: string;
-    dataProximaDose?: string;
-    lote?: string;
-    observacao?: string;
-    cicloId?: string;
-  }>;
-  vermifugos: Array<{
-    clientGeneratedId: string;
-    animalNumero: string;
-    nomeVermifugo: string;
-    dose?: string;
-    dataAplicacao: string;
-    dataProximaDose?: string;
-    observacao?: string;
-    cicloId?: string;
-  }>;
-  vitaminas: Array<{
-    clientGeneratedId: string;
-    animalNumero: string;
-    nomeVitamina: string;
-    dose?: string;
-    dataAplicacao: string;
-    dataProximaDose?: string;
-    observacao?: string;
-    cicloId?: string;
-  }>;
-}
-
 export interface SyncResult {
   pesagensProcessadas: number;
   vacinasProcessadas: number;
@@ -184,4 +143,6 @@ export interface SyncResult {
   vitaminasProcessadas: number;
   duplicados: number;
   erros: string[];
+  /** clientGeneratedIds recusados — o app mantém esses registros pendentes para correção. */
+  rejeitados: string[];
 }

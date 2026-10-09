@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { createAnimalsBatch } from "@/services/animal-service";
-import { getCurrentFarm } from "@/lib/farm";
-import { apiHandler, NotFoundError, ForbiddenError } from "@/lib/api-errors";
+import { requireFarm } from "@/lib/farm";
+import { apiHandler, ForbiddenError } from "@/lib/api-errors";
 import { userCanWriteToFarm } from "@/lib/ownership";
 
 const batchSchema = z.object({
@@ -15,10 +15,7 @@ const batchSchema = z.object({
  * Body: { numeros: ["003", "004", ...] }
  */
 export const POST = apiHandler(async (request: NextRequest) => {
-  const { user, farm } = await getCurrentFarm();
-  if (!farm || !user) {
-    throw new NotFoundError("Nenhuma fazenda encontrada");
-  }
+  const { user, farm } = await requireFarm();
 
   const canWrite = await userCanWriteToFarm(user.id, farm.id);
   if (!canWrite) {

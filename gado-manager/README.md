@@ -69,20 +69,7 @@ cd gado-manager
 npm install
 ```
 
-### 2. Configurar banco de dados
-
-```bash
-# Criar migration e banco SQLite
-npx prisma migrate dev
-
-# Gerar cliente Prisma
-npx prisma generate
-
-# Popular dados de exemplo (opcional)
-npx tsx prisma/seed.ts
-```
-
-### 3. Configurar variáveis de ambiente
+### 2. Configurar variáveis de ambiente
 
 Copie `.env.example` para `.env`:
 
@@ -90,7 +77,37 @@ Copie `.env.example` para `.env`:
 cp .env.example .env
 ```
 
-Edite `.env` com suas configurações.
+Edite `.env` com suas configurações. **Obrigatório:** troque o `NEXTAUTH_SECRET`
+por um valor aleatório de pelo menos 32 caracteres. O servidor recusa o valor de
+exemplo, porque com ele qualquer pessoa conseguiria forjar um login:
+
+```bash
+node -e "console.log(require('crypto').randomBytes(48).toString('base64url'))"
+```
+
+Para acessar o servidor de desenvolvimento pelo celular na rede local, coloque o
+IP do PC em `DEV_ALLOWED_ORIGINS` (veja o `.env.example`).
+
+### 3. Configurar banco de dados
+
+```bash
+# Cria/atualiza as tabelas no banco do TURSO_DATABASE_URL (Turso ou file:)
+# Pode rodar quantas vezes quiser: só cria o que falta (tabelas, índices e
+# colunas novas, como User.tokenVersion).
+node scripts/push-schema-turso.ts    # Node 22.6+ (ou: npx tsx scripts/push-schema-turso.ts)
+
+# O cliente Prisma é gerado automaticamente no npm install (postinstall).
+
+# Popular dados de exemplo (opcional, só em banco local)
+npx tsx prisma/seed.ts
+```
+
+O seed recusa rodar contra um banco remoto (Turso) — use `SEED_ALLOW_REMOTE=1`
+se for intencional. A senha da conta demo vem de `SEED_DEMO_PASSWORD` ou é gerada
+na hora e mostrada no terminal.
+
+> A pasta `prisma/migrations` está desatualizada em relação ao schema (ex.: a
+> migration inicial não tem `farmId`); o script acima é a fonte de verdade.
 
 ### 4. Executar o projeto
 
@@ -180,7 +197,30 @@ Vaccination
 | `GET` | `/api/animals/:id/cycles` | Listar ciclos |
 | `GET` | `/api/animals/:id/report` | Relatório individual |
 | `GET` | `/api/reports/general` | Relatório geral |
-| `POST` | `/api/sync` | Sincronização offline |
+| `POST` | `/api/animals/:id/vermifuges` | Registrar vermífugo |
+| `GET` | `/api/animals/:id/vermifuges` | Listar vermífugos |
+| `POST` | `/api/animals/:id/vitamins` | Registrar vitamina |
+| `GET` | `/api/animals/:id/vitamins` | Listar vitaminas |
+| `POST` | `/api/sync` | Sincronização offline (até 500 registros por tipo) |
+| `POST` | `/api/auth/logout` | Sair; com `{"todosDispositivos": true}` invalida todos os tokens |
+| `GET` | `/api/config/server-url` | URL atual do túnel (somente leitura) |
+
+### Permissões por nível
+
+| Ação | OWNER | ADMIN | MEMBER |
+|------|:-----:|:-----:|:------:|
+| Ver rebanho e relatórios | ✅ | ✅ | ✅ |
+| Lançar pesagem, vacina, vermífugo, vitamina (site e app) | ✅ | ✅ | ✅ |
+| Cadastrar, excluir ou vender boi; iniciar ciclo | ✅ | ✅ | ❌ |
+| Aprovar pedidos de entrada | ✅ | ✅ | ❌ |
+
+Todo registro guarda quem lançou (`criadoPorId`), inclusive os que chegam pelo app.
+
+### URL do túnel
+
+A URL do Cloudflare Tunnel é gravada em `.runtime-config/server-url.json` pelos
+scripts locais (`start-*.bat`, `scripts/*.ps1`). Não existe rota de API para
+alterá-la — só quem tem acesso ao disco do PC consegue trocar.
 
 ## 🔄 Sincronização Offline/Online
 
@@ -259,7 +299,10 @@ gado-manager/
 - UUIDs para idempotência na sincronização
 - Sem secrets no repositório (.env.example)
 - Tratamento de erros com mensagens amigáveis
-- Estrutura preparada para autenticação (NextAuth)
+- Login próprio com JWT (HS256) em cookie httpOnly (site) ou Bearer (app/bots)
+- "Sair de todos os dispositivos" invalida todos os tokens do usuário
+- Rate limit em login, cadastro, sincronização e pedidos de entrada
+- Histórico de auditorias em `SECURITY-AUDIT.md`
 
 ## 📊 Cálculos
 

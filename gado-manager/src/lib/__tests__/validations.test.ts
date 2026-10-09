@@ -3,6 +3,10 @@ import {
   animalSchema,
   weightRecordSchema,
   vaccinationSchema,
+  vermifugeSchema,
+  vitaminSchema,
+  normalizeEmail,
+  animalStatusFilterSchema,
 } from "../validations";
 
 describe("animalSchema", () => {
@@ -113,5 +117,45 @@ describe("vaccinationSchema", () => {
       origem: "WEB",
     });
     expect(result.success).toBe(false);
+  });
+});
+
+describe("vermifugeSchema / vitaminSchema", () => {
+  const base = {
+    animalId: "550e8400-e29b-41d4-a716-446655440000",
+    cicloId: "550e8400-e29b-41d4-a716-446655440001",
+    dataAplicacao: "2026-10-01",
+  };
+
+  it("aceita vermífugo válido", () => {
+    expect(vermifugeSchema.safeParse({ ...base, nomeVermifugo: "Ivermectina", dose: "5ml" }).success).toBe(true);
+  });
+
+  it("recusa vermífugo com script", () => {
+    expect(
+      vermifugeSchema.safeParse({ ...base, nomeVermifugo: "<img src=x onerror=alert(1)>" }).success
+    ).toBe(false);
+  });
+
+  it("recusa vitamina com data inválida", () => {
+    expect(vitaminSchema.safeParse({ ...base, nomeVitamina: "ADE", dataAplicacao: "ontem" }).success).toBe(false);
+  });
+
+  it("aceita próxima dose vazia", () => {
+    expect(vitaminSchema.safeParse({ ...base, nomeVitamina: "ADE", dataProximaDose: "" }).success).toBe(true);
+  });
+});
+
+describe("normalizeEmail", () => {
+  it("remove espaços e deixa minúsculo", () => {
+    expect(normalizeEmail("  Joao@Gmail.COM ")).toBe("joao@gmail.com");
+  });
+});
+
+describe("animalStatusFilterSchema", () => {
+  it("aceita status conhecidos e recusa o resto", () => {
+    expect(animalStatusFilterSchema.safeParse("ATIVO").success).toBe(true);
+    expect(animalStatusFilterSchema.safeParse(undefined).success).toBe(true);
+    expect(animalStatusFilterSchema.safeParse("QUALQUER").success).toBe(false);
   });
 });

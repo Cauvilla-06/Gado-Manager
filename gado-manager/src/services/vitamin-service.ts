@@ -1,5 +1,9 @@
 import { db } from "@/lib/db";
-import { ValidationError } from "@/lib/api-errors";
+import { vitaminSchema } from "@/lib/validations";
+import { assertCanRecord } from "@/services/record-guards";
+import { z } from "zod";
+
+type VitaminInput = z.input<typeof vitaminSchema>;
 
 export async function getVitaminsByAnimal(animalId: string, cicloId?: string) {
   const where: Record<string, string> = { animalId };
@@ -14,35 +18,34 @@ export async function getVitaminsByAnimal(animalId: string, cicloId?: string) {
   });
 }
 
-export async function createVitamin(data: {
-  animalId: string;
-  cicloId: string;
-  criadoPorId?: string;
-  nomeVitamina: string;
-  dose?: string;
-  dataAplicacao: string;
-  dataProximaDose?: string;
-  observacao?: string;
-}) {
-  if (!data.nomeVitamina) {
-    throw new ValidationError("Nome da vitamina é obrigatório");
-  }
-  if (!data.dataAplicacao) {
-    throw new ValidationError("Data de aplicação é obrigatória");
-  }
+export async function createVitamin(data: VitaminInput) {
+  const validated = vitaminSchema.parse(data);
 
-  return db.vitamin.create({
-    data: {
-      animalId: data.animalId,
-      cicloId: data.cicloId,
-      criadoPorId: data.criadoPorId,
-      nomeVitamina: data.nomeVitamina,
-      dose: data.dose,
-      dataAplicacao: new Date(data.dataAplicacao),
-      dataProximaDose: data.dataProximaDose
-        ? new Date(data.dataProximaDose)
-        : undefined,
-      observacao: data.observacao,
-    },
+  // Atomic: validate + create + update timestamp
+  return db.$transaction(async (tx) => {
+    await assertCanRecord(tx, validated.animalId, validated.cicloId);
+
+    const [record] = await Promise.all([
+      tx.vitamin.create({
+        data: {
+          animalId: validated.animalId,
+          cicloId: validated.cicloId,
+          criadoPorId: validated.criadoPorId,
+          nomeVitamina: validated.nomeVitamina,
+          dose: validated.dose,
+          dataAplicacao: new Date(validated.dataAplicacao),
+          dataProximaDose: validated.dataProximaDose
+            ? new Date(validated.dataProximaDose)
+            : undefined,
+          observacao: validated.observacao,
+        },
+      }),
+      tx.animal.update({
+        where: { id: validated.animalId },
+        data: { atualizadoEm: new Date() },
+      }),
+    ]);
+
+    return record;
   });
 }

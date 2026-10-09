@@ -1,8 +1,19 @@
+// Valor de exemplo do .env.example — público no repositório, nunca pode ser usado
+const EXAMPLE_SECRET = "mude_este_secret_em_producao";
+const MIN_SECRET_LENGTH = 32;
+
 function getSecret(): string {
   const secret = process.env.NEXTAUTH_SECRET;
   if (!secret) {
     throw new Error(
       "NEXTAUTH_SECRET não está configurado. Defina a variável de ambiente NEXTAUTH_SECRET."
+    );
+  }
+  // Com um segredo conhecido/curto, qualquer um consegue forjar tokens de login
+  if (secret === EXAMPLE_SECRET || secret.length < MIN_SECRET_LENGTH) {
+    throw new Error(
+      `NEXTAUTH_SECRET inseguro: use um valor aleatório com pelo menos ${MIN_SECRET_LENGTH} caracteres. ` +
+        `Gere um com: node -e "console.log(require('crypto').randomBytes(48).toString('base64url'))"`
     );
   }
   return secret;
@@ -42,13 +53,18 @@ export interface JWTUser {
   id: string;
   name: string;
   email: string;
+  /** Versão do token (User.tokenVersion). Tokens antigos, sem o campo, valem como 0. */
+  tokenVersion?: number;
 }
 
 export async function signJWT(payload: JWTUser): Promise<string> {
   const header = base64url(JSON.stringify({ alg: "HS256", typ: "JWT" }));
   const body = base64url(
     JSON.stringify({
-      ...payload,
+      id: payload.id,
+      name: payload.name,
+      email: payload.email,
+      tv: payload.tokenVersion ?? 0,
       iat: Math.floor(Date.now() / 1000),
       exp: Math.floor(Date.now() / 1000) + 30 * 24 * 60 * 60,
     })
@@ -82,7 +98,12 @@ export async function verifyJWT(token: string): Promise<JWTUser | null> {
     );
     if (payload.exp && payload.exp < Math.floor(Date.now() / 1000)) return null;
 
-    return { id: payload.id, name: payload.name, email: payload.email };
+    return {
+      id: payload.id,
+      name: payload.name,
+      email: payload.email,
+      tokenVersion: typeof payload.tv === "number" ? payload.tv : 0,
+    };
   } catch {
     return null;
   }

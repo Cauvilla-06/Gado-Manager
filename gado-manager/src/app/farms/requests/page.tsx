@@ -38,10 +38,10 @@ export default function FarmRequestsPage() {
   async function handleAction(requestId: string, action: "APROVADO" | "REJEITADO") {
     setProcessingId(requestId);
     try {
-      const res = await fetch("/api/farms/join/[id]", {
+      const res = await fetch(`/api/farms/join/${encodeURIComponent(requestId)}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ requestId, action }),
+        body: JSON.stringify({ action }),
       });
 
       if (res.ok) {

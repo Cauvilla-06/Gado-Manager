@@ -15,6 +15,7 @@ async function main() {
       "name" TEXT NOT NULL,
       "email" TEXT NOT NULL,
       "passwordHash" TEXT NOT NULL,
+      "tokenVersion" INTEGER NOT NULL DEFAULT 0,
       "criadoEm" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
       "atualizadoEm" DATETIME NOT NULL
     )`,
@@ -70,6 +71,10 @@ async function main() {
     `CREATE INDEX IF NOT EXISTS "Animal_farmId_idx" ON "Animal"("farmId")`,
     `CREATE INDEX IF NOT EXISTS "Animal_numeroIdentificacao_idx" ON "Animal"("numeroIdentificacao")`,
     `CREATE INDEX IF NOT EXISTS "Animal_status_idx" ON "Animal"("status")`,
+    // Impede dois animais ATIVOS com o mesmo número na mesma fazenda, mesmo
+    // com cadastros simultâneos (vendidos podem repetir o número).
+    // Se falhar, já existem duplicados ativos no banco: resolva-os e rode de novo.
+    `CREATE UNIQUE INDEX IF NOT EXISTS "Animal_farm_numero_ativo_key" ON "Animal"("farmId", "numeroIdentificacao") WHERE "status" = 'ATIVO'`,
 
     `CREATE TABLE IF NOT EXISTS "AnimalCycle" (
       "id" TEXT NOT NULL PRIMARY KEY,
@@ -196,6 +201,32 @@ async function main() {
     } catch (err) {
       console.error(`  ❌ Failed: ${err instanceof Error ? err.message : String(err)}`);
       console.error(`     SQL: ${sql.substring(0, 80)}...`);
+    }
+  }
+
+  // Colunas adicionadas depois da criação inicial: aplica só se faltarem
+  // (bancos antigos já têm a tabela, então o CREATE TABLE acima não as cria).
+  const addedColumns = [
+    {
+      table: "User",
+      column: "tokenVersion",
+      sql: `ALTER TABLE "User" ADD COLUMN "tokenVersion" INTEGER NOT NULL DEFAULT 0`,
+    },
+  ];
+
+  for (const { table, column, sql } of addedColumns) {
+    try {
+      const info = await client.execute(`PRAGMA table_info("${table}")`);
+      const exists = info.rows.some((row) => row.name === column);
+      if (exists) {
+        console.log(`  ✔️  Column: ${table}.${column} (já existe)`);
+        continue;
+      }
+      await client.execute(sql);
+      console.log(`  ➕ Column: ${table}.${column}`);
+    } catch (err) {
+      console.error(`  ❌ Failed: ${err instanceof Error ? err.message : String(err)}`);
+      console.error(`     SQL: ${sql}`);
     }
   }
 

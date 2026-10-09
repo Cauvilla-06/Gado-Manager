@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { sellAnimal } from "@/services/cycle-service";
-import { apiHandler, NotFoundError, ForbiddenError } from "@/lib/api-errors";
-import { getCurrentFarm } from "@/lib/farm";
+import { apiHandler, ForbiddenError } from "@/lib/api-errors";
+import { requireFarm } from "@/lib/farm";
 import { animalBelongsToFarm, userCanWriteToFarm } from "@/lib/ownership";
 
 interface RouteContext {
@@ -10,10 +10,7 @@ interface RouteContext {
 
 export const POST = apiHandler<RouteContext>(async (request: NextRequest, context) => {
   const { id } = await context.params;
-  const { user, farm } = await getCurrentFarm();
-  if (!farm || !user) {
-    throw new NotFoundError("Nenhuma fazenda encontrada");
-  }
+  const { user, farm } = await requireFarm();
 
   // Ownership validation
   const belongs = await animalBelongsToFarm(id, farm.id);

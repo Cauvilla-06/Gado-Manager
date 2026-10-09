@@ -126,10 +126,22 @@ export default function Navbar() {
     loadRequests();
   }, [currentFarm]);
 
-  async function handleLogout() {
+  async function handleLogout(todosDispositivos = false) {
+    if (
+      todosDispositivos &&
+      !window.confirm(
+        "Encerrar a sessão em TODOS os dispositivos (celular, bots e outros navegadores)?"
+      )
+    ) {
+      return;
+    }
     sessionStorage.removeItem("gm:user");
     sessionStorage.removeItem("gm:farms");
-    await fetch("/api/auth/logout", { method: "POST" });
+    await fetch("/api/auth/logout", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ todosDispositivos }),
+    });
     window.location.href = "/login"; // eslint-disable-line @next/next/no-location-assign-relative-destination
   }
 
@@ -320,6 +332,17 @@ export default function Navbar() {
                           )}
                         </Link>
                       )}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShowFarmMenu(false);
+                          handleLogout(true);
+                        }}
+                        className="flex items-center gap-2 rounded-md px-2 py-2 text-sm text-red-600 hover:bg-accent w-full text-left"
+                      >
+                        <LogOut className="h-3.5 w-3.5" />
+                        Sair de todos os dispositivos
+                      </button>
                     </div>
                   </div>
                 </>
@@ -333,7 +356,7 @@ export default function Navbar() {
               {user.name}
             </span>
             <button
-              onClick={handleLogout}
+              onClick={() => handleLogout()}
               className="rounded-md p-2 text-sm text-muted-foreground hover:bg-accent hover:text-accent-foreground transition-colors"
               title="Sair"
             >

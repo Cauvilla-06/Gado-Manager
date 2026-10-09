@@ -6,8 +6,9 @@ import {
   searchAnimals,
   deleteAnimalsBatch,
 } from "@/services/animal-service";
-import { getCurrentFarm } from "@/lib/farm";
-import { apiHandler, NotFoundError, ForbiddenError } from "@/lib/api-errors";
+import { requireFarm } from "@/lib/farm";
+import { animalStatusFilterSchema } from "@/lib/validations";
+import { apiHandler, ForbiddenError } from "@/lib/api-errors";
 import { userCanWriteToFarm } from "@/lib/ownership";
 
 const batchDeleteSchema = z.object({
@@ -15,14 +16,11 @@ const batchDeleteSchema = z.object({
 });
 
 export const GET = apiHandler(async (request: NextRequest) => {
-  const { farm } = await getCurrentFarm();
-  if (!farm) {
-    throw new NotFoundError("Nenhuma fazenda encontrada");
-  }
+  const { farm } = await requireFarm();
 
   const { searchParams } = new URL(request.url);
   const query = searchParams.get("q");
-  const status = searchParams.get("status") || undefined;
+  const status = animalStatusFilterSchema.parse(searchParams.get("status") || undefined);
 
   let animals;
   if (query) {
@@ -35,10 +33,7 @@ export const GET = apiHandler(async (request: NextRequest) => {
 });
 
 export const POST = apiHandler(async (request: NextRequest) => {
-  const { user, farm } = await getCurrentFarm();
-  if (!farm || !user) {
-    throw new NotFoundError("Nenhuma fazenda encontrada");
-  }
+  const { user, farm } = await requireFarm();
 
   // Role validation: MEMBER é somente leitura
   const canWrite = await userCanWriteToFarm(user.id, farm.id);
@@ -57,10 +52,7 @@ export const POST = apiHandler(async (request: NextRequest) => {
  * Body: { ids: ["uuid1", "uuid2", ...] }
  */
 export const DELETE = apiHandler(async (request: NextRequest) => {
-  const { user, farm } = await getCurrentFarm();
-  if (!farm || !user) {
-    throw new NotFoundError("Nenhuma fazenda encontrada");
-  }
+  const { user, farm } = await requireFarm();
 
   const canWrite = await userCanWriteToFarm(user.id, farm.id);
   if (!canWrite) {

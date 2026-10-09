@@ -7,7 +7,13 @@ function getAllowedDevOrigins(): string[] {
   // O Cloudflare Tunnel gera um subdominio *.trycloudflare.com NOVO a cada execucao.
   // O wildcard garante que o site sempre funcione pelo link do tunnel, sem precisar
   // reiniciar o servidor nem editar esta config a cada URL nova.
-  const origins = ["192.168.1.175", "*.trycloudflare.com"];
+  // IPs/hosts extras (ex.: o IP do PC na rede local) vêm do .env, não do código:
+  // DEV_ALLOWED_ORIGINS="192.168.1.175,meu-pc.local"
+  const extra = (process.env.DEV_ALLOWED_ORIGINS ?? "")
+    .split(",")
+    .map((o) => o.trim())
+    .filter(Boolean);
+  const origins = ["*.trycloudflare.com", ...extra];
   try {
     const configPath = path.join(process.cwd(), ".runtime-config", "server-url.json");
     const raw = fs.readFileSync(configPath, "utf-8").replace(/^\uFEFF/, "");

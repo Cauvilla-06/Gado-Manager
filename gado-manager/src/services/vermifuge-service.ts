@@ -1,5 +1,9 @@
 import { db } from "@/lib/db";
-import { ValidationError } from "@/lib/api-errors";
+import { vermifugeSchema } from "@/lib/validations";
+import { assertCanRecord } from "@/services/record-guards";
+import { z } from "zod";
+
+type VermifugeInput = z.input<typeof vermifugeSchema>;
 
 export async function getVermifugesByAnimal(animalId: string, cicloId?: string) {
   const where: Record<string, string> = { animalId };
@@ -14,35 +18,34 @@ export async function getVermifugesByAnimal(animalId: string, cicloId?: string) 
   });
 }
 
-export async function createVermifuge(data: {
-  animalId: string;
-  cicloId: string;
-  criadoPorId?: string;
-  nomeVermifugo: string;
-  dose?: string;
-  dataAplicacao: string;
-  dataProximaDose?: string;
-  observacao?: string;
-}) {
-  if (!data.nomeVermifugo) {
-    throw new ValidationError("Nome do vermífugo é obrigatório");
-  }
-  if (!data.dataAplicacao) {
-    throw new ValidationError("Data de aplicação é obrigatória");
-  }
+export async function createVermifuge(data: VermifugeInput) {
+  const validated = vermifugeSchema.parse(data);
 
-  return db.vermifuge.create({
-    data: {
-      animalId: data.animalId,
-      cicloId: data.cicloId,
-      criadoPorId: data.criadoPorId,
-      nomeVermifugo: data.nomeVermifugo,
-      dose: data.dose,
-      dataAplicacao: new Date(data.dataAplicacao),
-      dataProximaDose: data.dataProximaDose
-        ? new Date(data.dataProximaDose)
-        : undefined,
-      observacao: data.observacao,
-    },
+  // Atomic: validate + create + update timestamp
+  return db.$transaction(async (tx) => {
+    await assertCanRecord(tx, validated.animalId, validated.cicloId);
+
+    const [record] = await Promise.all([
+      tx.vermifuge.create({
+        data: {
+          animalId: validated.animalId,
+          cicloId: validated.cicloId,
+          criadoPorId: validated.criadoPorId,
+          nomeVermifugo: validated.nomeVermifugo,
+          dose: validated.dose,
+          dataAplicacao: new Date(validated.dataAplicacao),
+          dataProximaDose: validated.dataProximaDose
+            ? new Date(validated.dataProximaDose)
+            : undefined,
+          observacao: validated.observacao,
+        },
+      }),
+      tx.animal.update({
+        where: { id: validated.animalId },
+        data: { atualizadoEm: new Date() },
+      }),
+    ]);
+
+    return record;
   });
 }

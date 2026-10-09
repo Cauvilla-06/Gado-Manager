@@ -236,10 +236,21 @@ export async function createAnimalsBatch(
         });
       }
     } catch (err) {
+      // Outro cadastro simultâneo criou o mesmo número (índice único de ativos)
+      if (err && typeof err === "object" && "code" in err && err.code === "P2002") {
+        duplicados.push(numero);
+        continue;
+      }
       erros.push({
         numeroIdentificacao: numero,
-        erro: err instanceof Error ? err.message : String(err),
+        erro:
+          err && typeof err === "object" && "issues" in err
+            ? "Número inválido"
+            : "Erro ao cadastrar",
       });
+      if (!(err && typeof err === "object" && "issues" in err)) {
+        console.error("createAnimalsBatch error:", err);
+      }
     }
   }
 

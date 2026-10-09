@@ -1,9 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
-import { db } from "@/lib/db";
 import bcrypt from "bcryptjs";
 import { signJWT } from "@/lib/jwt";
 import { rateLimitResponse, RATE_LIMITS } from "@/lib/ratelimit";
 import { getClientIp } from "@/lib/client-ip";
+import { normalizeEmail } from "@/lib/validations";
+import { findUserByEmail } from "@/lib/users";
 
 export async function POST(request: NextRequest) {
   // Rate limiting: 5 tentativas por minuto por IP real (anti-spoof)
@@ -15,9 +16,16 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    const { email, password } = await request.json();
+    const body = await request.json().catch(() => null);
+    const email: unknown = body?.email;
+    const password: unknown = body?.password;
 
-    if (!email || !password) {
+    if (
+      typeof email !== "string" ||
+      typeof password !== "string" ||
+      !email.trim() ||
+      !password
+    ) {
       return NextResponse.json(
         { error: "Email e senha são obrigatórios" },
         { status: 400 }
@@ -26,14 +34,14 @@ export async function POST(request: NextRequest) {
 
     // Limita tentativas por CONTA também (brute force distribuído por IPs)
     const mailLimit = rateLimitResponse(
-      `login-email:${email.trim().toLowerCase()}`,
+      `login-email:${normalizeEmail(email)}`,
       RATE_LIMITS.login
     );
     if (mailLimit.limited) {
       return mailLimit.response;
     }
 
-    const user = await db.user.findUnique({ where: { email } });
+    const user = await findUserByEmail(email);
     if (!user) {
       return NextResponse.json(
         { error: "Email ou senha incorretos" },
@@ -50,7 +58,12 @@ export async function POST(request: NextRequest) {
     }
 
     // Create JWT
-    const token = await signJWT({ id: user.id, name: user.name, email: user.email });
+    const token = await signJWT({
+      id: user.id,
+      name: user.name,
+      email: user.email,
+      tokenVersion: user.tokenVersion,
+    });
 
     // Set cookie
     const response = NextResponse.json({

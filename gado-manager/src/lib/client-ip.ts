@@ -28,46 +28,6 @@ export function getClientIp(headers: Headers): string {
   return "local";
 }
 
-/**
- * Detecta se a requisição veio pela internet (túnel/proxy) em vez da máquina local.
- *
- * NÃO confiar no IP do socket: o cloudflared roda NA própria máquina e repassa
- * tudo para 127.0.0.1 — todo tráfego do túnel chega como "IP local".
- *
- * Sinais confiáveis de túnel (definidos pelo edge do Cloudflare, não forjáveis pelo cliente):
- *  - cf-connecting-ip, cf-ray, cf-worker, cdn-loop (o Cloudflare sobrescreve os que o cliente manda)
- *
- * Origin/Referer remotos também denunciam requisição de outro site.
- */
-export function isTunnelRequest(request: {
-  headers: Headers;
-}): boolean {
-  const h = request.headers;
-  if (
-    h.get("cf-connecting-ip") ||
-    h.get("cf-ray") ||
-    h.get("cf-worker") ||
-    h.get("cdn-loop")
-  ) {
-    return true;
-  }
-
-  const remoteUrl = (value: string | null): boolean => {
-    if (!value) return false;
-    try {
-      const host = new URL(value).hostname;
-      return host !== "localhost" && host !== "127.0.0.1" && !/^(192\.168\.|10\.|172\.(1[6-9]|2\d|3[01])\.)/.test(host);
-    } catch {
-      return false;
-    }
-  };
-
-  if (remoteUrl(h.get("origin"))) return true;
-  if (remoteUrl(h.get("referer"))) return true;
-
-  return false;
-}
-
 function isValidIp(value: string): boolean {
   // IPv4 simples ou IPv6 raqueável (inclui ::1 e_ranges)
   return /^[0-9a-fA-F:.]{3,45}$/.test(value);

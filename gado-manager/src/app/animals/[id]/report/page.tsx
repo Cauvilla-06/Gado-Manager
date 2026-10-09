@@ -18,6 +18,7 @@ import {
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
 import * as XLSX from "xlsx";
+import { downloadCsv } from "@/lib/csv";
 
 interface ReportData {
   animal: {
@@ -337,15 +338,13 @@ export default function ReportPage({
       ];
     });
 
-    const csv = [headers, ...rows].map((r) => r.join(",")).join("\n");
-    const blob = new Blob([csv], { type: "text/csv" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `relatorio_boi_${report.animal.numeroIdentificacao}_ciclo_${report.cicloAtual.numeroCiclo}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
-  }  function exportXLSX() {
+    downloadCsv(
+      `relatorio_boi_${report.animal.numeroIdentificacao}_ciclo_${report.cicloAtual.numeroCiclo}.csv`,
+      [headers, ...rows]
+    );
+  }
+
+  function exportXLSX() {
     if (!report) return;
     const wb = XLSX.utils.book_new();
 

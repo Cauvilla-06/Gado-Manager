@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getAnimalById, deleteAnimal } from "@/services/animal-service";
-import { getCurrentFarm } from "@/lib/farm";
+import { requireFarm } from "@/lib/farm";
 import { apiHandler, NotFoundError, ForbiddenError } from "@/lib/api-errors";
 import { animalBelongsToFarm, userCanWriteToFarm } from "@/lib/ownership";
 
@@ -9,10 +9,7 @@ interface RouteContext {
 }
 
 export const GET = apiHandler<RouteContext>(async (request: NextRequest, context) => {
-  const { farm } = await getCurrentFarm();
-  if (!farm) {
-    throw new NotFoundError("Nenhuma fazenda encontrada");
-  }
+  const { farm } = await requireFarm();
 
   const { id } = await context.params;
 
@@ -26,10 +23,7 @@ export const GET = apiHandler<RouteContext>(async (request: NextRequest, context
 
 export const DELETE = apiHandler<RouteContext>(async (request: NextRequest, context) => {
   const { id } = await context.params;
-  const { user, farm } = await getCurrentFarm();
-  if (!farm || !user) {
-    throw new NotFoundError("Nenhuma fazenda encontrada");
-  }
+  const { user, farm } = await requireFarm();
 
   // Ownership validation
   const belongs = await animalBelongsToFarm(id, farm.id);

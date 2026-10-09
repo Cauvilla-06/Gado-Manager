@@ -1,4 +1,5 @@
 import { db } from "@/lib/db";
+import { ConflictError, NotFoundError } from "@/lib/api-errors";
 
 export async function getCyclesByAnimal(animalId: string) {
   return db.animalCycle.findMany({
@@ -21,13 +22,13 @@ export async function getActiveCycle(animalId: string) {
 export async function sellAnimal(animalId: string) {
   return db.$transaction(async (tx) => {
     const animal = await tx.animal.findUnique({ where: { id: animalId } });
-    if (!animal) throw new Error("Animal não encontrado");
-    if (animal.status === "VENDIDO") throw new Error("Animal já foi vendido");
+    if (!animal) throw new NotFoundError("Animal");
+    if (animal.status === "VENDIDO") throw new ConflictError("Animal já foi vendido");
 
     const activeCycle = await tx.animalCycle.findFirst({
       where: { animalId, status: "ATIVO" },
     });
-    if (!activeCycle) throw new Error("Nenhum ciclo ativo encontrado para este animal");
+    if (!activeCycle) throw new ConflictError("Nenhum ciclo ativo encontrado para este animal");
 
     // Close current cycle and update animal status atomically
     const [updated] = await Promise.all([
@@ -49,7 +50,7 @@ export async function startNewCycle(animalId: string, observacoes?: string) {
   // Use a single atomic transaction for all operations
   return db.$transaction(async (tx) => {
     const animal = await tx.animal.findUnique({ where: { id: animalId } });
-    if (!animal) throw new Error("Animal não encontrado");
+    if (!animal) throw new NotFoundError("Animal");
 
     // Close any active cycle + get last cycle number in parallel
     const [activeCycle, lastCycle] = await Promise.all([

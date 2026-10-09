@@ -1,38 +1,28 @@
 import { NextResponse } from "next/server";
-import { getCurrentFarm } from "@/lib/farm";
+import { requireFarm } from "@/lib/farm";
 import { db } from "@/lib/db";
+import { apiHandler } from "@/lib/api-errors";
 
-export async function GET() {
-  try {
-    const { farm } = await getCurrentFarm();
-    if (!farm) {
-      return NextResponse.json({ error: "Nenhuma fazenda encontrada" }, { status: 404 });
-    }
+export const GET = apiHandler(async () => {
+  const { farm } = await requireFarm();
 
-    const memberships = await db.farmMembership.findMany({
-      where: { farmId: farm.id },
-      include: {
-        user: {
-          select: { id: true, name: true, email: true, criadoEm: true },
-        },
+  const memberships = await db.farmMembership.findMany({
+    where: { farmId: farm.id },
+    include: {
+      user: {
+        select: { id: true, name: true, email: true, criadoEm: true },
       },
-      orderBy: { criadoEm: "asc" },
-    });
+    },
+    orderBy: { criadoEm: "asc" },
+  });
 
-    const members = memberships.map((m) => ({
-      id: m.user.id,
-      name: m.user.name,
-      email: m.user.email,
-      role: m.role,
-      joinedAt: m.criadoEm,
-    }));
+  const members = memberships.map((m) => ({
+    id: m.user.id,
+    name: m.user.name,
+    email: m.user.email,
+    role: m.role,
+    joinedAt: m.criadoEm,
+  }));
 
-    return NextResponse.json({ farm: { name: farm.name, code: farm.code }, members });
-  } catch (error) {
-    console.error("Error fetching members:", error);
-    return NextResponse.json(
-      { error: "Erro ao buscar membros" },
-      { status: 500 }
-    );
-  }
-}
+  return NextResponse.json({ farm: { name: farm.name, code: farm.code }, members });
+});

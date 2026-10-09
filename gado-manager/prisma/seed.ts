@@ -2,6 +2,7 @@ import { PrismaClient } from "@prisma/client";
 import { PrismaLibSql } from "@prisma/adapter-libsql";
 import bcrypt from "bcryptjs";
 import "dotenv/config";
+import { randomBytes } from "crypto";
 
 const adapter = new PrismaLibSql({
   url: process.env.TURSO_DATABASE_URL || "file:./prisma/dev.db",
@@ -10,10 +11,23 @@ const adapter = new PrismaLibSql({
 const prisma = new PrismaClient({ adapter });
 
 async function main() {
+  // Proteção: o seed cria dados e uma conta de demonstração. Rodar contra o
+  // banco remoto (Turso) por engano deixaria essa conta em produção.
+  const isRemote = !!process.env.TURSO_DATABASE_URL && !process.env.TURSO_DATABASE_URL.startsWith("file:");
+  if (isRemote && process.env.SEED_ALLOW_REMOTE !== "1") {
+    console.error(
+      "Seed cancelado: TURSO_DATABASE_URL aponta para um banco remoto.\n" +
+        "Se tiver certeza, rode com SEED_ALLOW_REMOTE=1."
+    );
+    process.exit(1);
+  }
+
   console.log("Seeding database...");
 
-  // Create demo user
-  const passwordHash = await bcrypt.hash("123456", 10);
+  // Create demo user — senha via SEED_DEMO_PASSWORD ou gerada aleatoriamente
+  const demoPassword =
+    process.env.SEED_DEMO_PASSWORD || `demo-${randomBytes(9).toString("base64url")}1`;
+  const passwordHash = await bcrypt.hash(demoPassword, 12);
   const user = await prisma.user.create({
     data: {
       name: "Demo User",
@@ -218,7 +232,7 @@ async function main() {
   });
 
   console.log("Seed completed successfully!");
-  console.log(`Demo login: demo@gado.com / 123456`);
+  console.log(`Demo login: demo@gado.com / ${demoPassword}`);
   console.log(`Farm codes: fazenda-demo, fazenda-sec`);
 }
 

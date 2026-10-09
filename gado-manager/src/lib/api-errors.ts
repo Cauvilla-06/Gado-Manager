@@ -72,6 +72,14 @@ export function handleApiError(error: unknown): NextResponse {
     );
   }
 
+  // Corpo da requisição não é JSON válido (request.json() falhou)
+  if (error instanceof SyntaxError) {
+    return NextResponse.json(
+      { error: "Corpo da requisição inválido", code: "VALIDATION_ERROR" },
+      { status: 400 }
+    );
+  }
+
   // Erros do Prisma
   if (error && typeof error === "object" && "code" in error) {
     const prismaError = error as { code: string; message: string };

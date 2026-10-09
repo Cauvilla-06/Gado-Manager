@@ -83,7 +83,7 @@ describe("weight-service", () => {
     it("deve retornar registro existente por idempotência", async () => {
       const mockAnimal = { id: "1", status: "ATIVO" };
       const mockCycle = { id: "1", status: "ATIVO", animalId: validWeightData.animalId };
-      const existingRecord = { id: "existing", pesoKg: 451.5 };
+      const existingRecord = { id: "existing", pesoKg: 451.5, animalId: validWeightData.animalId };
 
       vi.mocked(db.animal.findUnique).mockResolvedValue(mockAnimal as never);
       vi.mocked(db.animalCycle.findUnique).mockResolvedValue(mockCycle as never);
@@ -98,6 +98,53 @@ describe("weight-service", () => {
 
       expect(result).toEqual(existingRecord);
       expect(db.weightRecord.create).not.toHaveBeenCalled();
+    });
+
+    it("não deve devolver registro de OUTRO animal com o mesmo clientGeneratedId", async () => {
+      vi.mocked(db.weightRecord.findUnique).mockResolvedValue({
+        id: "alheio",
+        pesoKg: 300,
+        animalId: "550e8400-e29b-41d4-a716-44665544ffff",
+      } as never);
+
+      await expect(
+        createWeightRecord({
+          ...validWeightData,
+          clientGeneratedId: "550e8400-e29b-41d4-a716-446655440002",
+        })
+      ).rejects.toThrow("Identificador do registro já utilizado");
+      expect(db.weightRecord.create).not.toHaveBeenCalled();
+    });
+
+    it("deve recusar ciclo de outro animal", async () => {
+      vi.mocked(db.weightRecord.findUnique).mockResolvedValue(null);
+      vi.mocked(db.animal.findUnique).mockResolvedValue({ id: "1", status: "ATIVO" } as never);
+      vi.mocked(db.animalCycle.findUnique).mockResolvedValue({
+        id: validWeightData.cicloId,
+        status: "ATIVO",
+        animalId: "550e8400-e29b-41d4-a716-44665544ffff",
+      } as never);
+
+      await expect(createWeightRecord(validWeightData)).rejects.toThrow(
+        "Ciclo não encontrado para este animal"
+      );
+    });
+
+    it("deve salvar quem registrou (criadoPorId)", async () => {
+      vi.mocked(db.weightRecord.findUnique).mockResolvedValue(null);
+      vi.mocked(db.animal.findUnique).mockResolvedValue({ id: "1", status: "ATIVO" } as never);
+      vi.mocked(db.animalCycle.findUnique).mockResolvedValue({
+        id: validWeightData.cicloId,
+        status: "ATIVO",
+        animalId: validWeightData.animalId,
+      } as never);
+      vi.mocked(db.weightRecord.create).mockResolvedValue({ id: "novo" } as never);
+      vi.mocked(db.animal.update).mockResolvedValue({} as never);
+
+      const criadoPorId = "550e8400-e29b-41d4-a716-446655440099";
+      await createWeightRecord({ ...validWeightData, criadoPorId });
+
+      expect(vi.mocked(db.weightRecord.create).mock.calls[0][0].data.criadoPorId).toBe(criadoPorId);
     });
   });
 

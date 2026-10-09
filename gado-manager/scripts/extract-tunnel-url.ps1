@@ -39,22 +39,17 @@ if (-not $Quiet) {
     Write-Host ""
 }
 
-# Salva a URL (via API; se falhar, grava direto no arquivo)
+# Salva a URL direto no arquivo lido pelo servidor (.runtime-config/server-url.json).
+# Nao existe mais POST na API para isso: so quem tem acesso ao disco do PC troca a URL.
 # Obs.: usa -Encoding ascii para nao gerar BOM, que quebraria o JSON.parse do Next.js
 try {
-    $body = @{ url = $url } | ConvertTo-Json
-    Invoke-RestMethod -Uri 'http://localhost:3000/api/config/server-url' -Method Post -ContentType 'application/json' -Body $body -TimeoutSec 5 | Out-Null
-    Write-Msg "[OK] URL salva no servidor!"
+    $configDir = Join-Path (Split-Path -Parent $PSScriptRoot) '.runtime-config'
+    if (-not (Test-Path $configDir)) { New-Item -ItemType Directory -Path $configDir -Force | Out-Null }
+    $configFile = Join-Path $configDir 'server-url.json'
+    @{ url = $url; updatedAt = (Get-Date -Format o) } | ConvertTo-Json | Set-Content $configFile -Encoding ascii
+    Write-Msg "[OK] URL salva em $configFile"
 } catch {
-    try {
-        $configDir = Join-Path (Get-Location) '.runtime-config'
-        if (-not (Test-Path $configDir)) { New-Item -ItemType Directory -Path $configDir -Force | Out-Null }
-        $configFile = Join-Path $configDir 'server-url.json'
-        @{ url = $url; updatedAt = (Get-Date -Format o) } | ConvertTo-Json | Set-Content $configFile -Encoding ascii
-        Write-Msg "[OK] URL salva no arquivo."
-    } catch {
-        Write-Msg "[AVISO] Nao foi possivel salvar a URL ($url)."
-    }
+    Write-Msg "[AVISO] Nao foi possivel salvar a URL ($url)."
 }
 
 if ($Quiet) {

@@ -1,67 +1,188 @@
+import { z } from "zod";
 import { db } from "@/lib/db";
-import { syncPayloadSchema } from "@/lib/validations";
-import type { SyncPayload, SyncResult } from "@/types";
+import {
+  syncPayloadSchema,
+  syncWeightSchema,
+  syncVaccinationSchema,
+  syncVermifugeSchema,
+  syncVitaminSchema,
+} from "@/lib/validations";
+import type { SyncResult } from "@/types";
+
+type Tx = Parameters<Parameters<typeof db.$transaction>[0]>[0];
+
+type SyncModel = "weightRecord" | "vaccination" | "vermifuge" | "vitamin";
+
+interface BaseSyncRecord {
+  clientGeneratedId: string;
+  animalNumero: string;
+  cicloId?: string;
+}
+
+interface SyncTypeConfig<T extends BaseSyncRecord> {
+  label: string;
+  model: SyncModel;
+  schema: z.ZodType<T>;
+  counter: keyof Pick<
+    SyncResult,
+    "pesagensProcessadas" | "vacinasProcessadas" | "vermifugosProcessados" | "vitaminasProcessadas"
+  >;
+  createMany: (
+    tx: Tx,
+    rows: Array<{ record: T; animalId: string; cicloId: string; userId: string }>
+  ) => Promise<number>;
+}
+
+const optionalDate = (v?: string) => (v ? new Date(v) : null);
+
+const WEIGHTS: SyncTypeConfig<z.infer<typeof syncWeightSchema>> = {
+  label: "[Pesagem]",
+  model: "weightRecord",
+  schema: syncWeightSchema,
+  counter: "pesagensProcessadas",
+  createMany: async (tx, rows) =>
+    (
+      await tx.weightRecord.createMany({
+        data: rows.map(({ record, animalId, cicloId, userId }) => ({
+          animalId,
+          cicloId,
+          criadoPorId: userId,
+          pesoKg: record.pesoKg,
+          dataPesagem: new Date(record.dataPesagem),
+          observacao: record.observacao,
+          origem: "ANDROID",
+          clientGeneratedId: record.clientGeneratedId,
+          sincronizado: true,
+        })),
+      })
+    ).count,
+};
+
+const VACCINES: SyncTypeConfig<z.infer<typeof syncVaccinationSchema>> = {
+  label: "[Vacina]",
+  model: "vaccination",
+  schema: syncVaccinationSchema,
+  counter: "vacinasProcessadas",
+  createMany: async (tx, rows) =>
+    (
+      await tx.vaccination.createMany({
+        data: rows.map(({ record, animalId, cicloId, userId }) => ({
+          animalId,
+          cicloId,
+          criadoPorId: userId,
+          nomeVacina: record.nomeVacina,
+          dataAplicacao: new Date(record.dataAplicacao),
+          dataProximaDose: optionalDate(record.dataProximaDose),
+          lote: record.lote,
+          observacao: record.observacao,
+          origem: "ANDROID",
+          clientGeneratedId: record.clientGeneratedId,
+        })),
+      })
+    ).count,
+};
+
+const VERMIFUGES: SyncTypeConfig<z.infer<typeof syncVermifugeSchema>> = {
+  label: "[Vermífugo]",
+  model: "vermifuge",
+  schema: syncVermifugeSchema,
+  counter: "vermifugosProcessados",
+  createMany: async (tx, rows) =>
+    (
+      await tx.vermifuge.createMany({
+        data: rows.map(({ record, animalId, cicloId, userId }) => ({
+          animalId,
+          cicloId,
+          criadoPorId: userId,
+          nomeVermifugo: record.nomeVermifugo,
+          dose: record.dose,
+          dataAplicacao: new Date(record.dataAplicacao),
+          dataProximaDose: optionalDate(record.dataProximaDose),
+          observacao: record.observacao,
+          origem: "ANDROID",
+          clientGeneratedId: record.clientGeneratedId,
+        })),
+      })
+    ).count,
+};
+
+const VITAMINS: SyncTypeConfig<z.infer<typeof syncVitaminSchema>> = {
+  label: "[Vitamina]",
+  model: "vitamin",
+  schema: syncVitaminSchema,
+  counter: "vitaminasProcessadas",
+  createMany: async (tx, rows) =>
+    (
+      await tx.vitamin.createMany({
+        data: rows.map(({ record, animalId, cicloId, userId }) => ({
+          animalId,
+          cicloId,
+          criadoPorId: userId,
+          nomeVitamina: record.nomeVitamina,
+          dose: record.dose,
+          dataAplicacao: new Date(record.dataAplicacao),
+          dataProximaDose: optionalDate(record.dataProximaDose),
+          observacao: record.observacao,
+          origem: "ANDROID",
+          clientGeneratedId: record.clientGeneratedId,
+        })),
+      })
+    ).count,
+};
 
 /**
- * Resolve múltiplos animais por número em batch.
- * Reduz N queries para 1 query.
+ * Resolve animais por número dentro da fazenda.
+ * Se existir mais de um com o mesmo número (ex.: um vendido e um ativo),
+ * o ATIVO tem prioridade.
  */
 async function findAnimalsByNumeros(
   numeros: string[],
   farmId: string
-): Promise<Map<string, { id: string }>> {
-  const uniqueNumeros = [...new Set(numeros)];
+): Promise<Map<string, { id: string; status: string }>> {
   const animals = await db.animal.findMany({
-    where: {
-      numeroIdentificacao: { in: uniqueNumeros },
-      farmId,
-    },
-    select: { id: true, numeroIdentificacao: true },
+    where: { numeroIdentificacao: { in: [...new Set(numeros)] }, farmId },
+    select: { id: true, numeroIdentificacao: true, status: true },
   });
 
-  const map = new Map<string, { id: string }>();
+  const map = new Map<string, { id: string; status: string }>();
   for (const animal of animals) {
-    map.set(animal.numeroIdentificacao, { id: animal.id });
-  }
-  return map;
-}
-
-/**
- * Resolve múltiplos ciclos ativos em batch.
- * Reduz N queries para 1 query.
- */
-async function resolveCicloIds(
-  animalIds: string[]
-): Promise<Map<string, string>> {
-  const uniqueIds = [...new Set(animalIds)];
-  const cycles = await db.animalCycle.findMany({
-    where: {
-      animalId: { in: uniqueIds },
-      status: "ATIVO",
-    },
-    orderBy: { numeroCiclo: "desc" },
-    select: { animalId: true, id: true },
-  });
-
-  // Pegar apenas o ciclo mais recente por animal
-  const map = new Map<string, string>();
-  for (const cycle of cycles) {
-    if (!map.has(cycle.animalId)) {
-      map.set(cycle.animalId, cycle.id);
+    const current = map.get(animal.numeroIdentificacao);
+    if (!current || (current.status !== "ATIVO" && animal.status === "ATIVO")) {
+      map.set(animal.numeroIdentificacao, { id: animal.id, status: animal.status });
     }
   }
   return map;
 }
 
-/**
- * Verificar duplicatas em batch por clientGeneratedId.
- */
-async function findDuplicates(
-  clientIds: string[],
-  model: "weightRecord" | "vaccination" | "vermifuge" | "vitamin"
-): Promise<Set<string>> {
-  const uniqueIds = [...new Set(clientIds)];
-  if (uniqueIds.length === 0) return new Set();
+/** Ciclos ATIVOS dos animais informados: animalId → cicloId mais recente. */
+async function findActiveCycles(animalIds: string[]): Promise<Map<string, string>> {
+  const cycles = await db.animalCycle.findMany({
+    where: { animalId: { in: [...new Set(animalIds)] }, status: "ATIVO" },
+    orderBy: { numeroCiclo: "desc" },
+    select: { animalId: true, id: true },
+  });
+
+  const map = new Map<string, string>();
+  for (const cycle of cycles) {
+    if (!map.has(cycle.animalId)) map.set(cycle.animalId, cycle.id);
+  }
+  return map;
+}
+
+/** Ciclos informados explicitamente pelo app: cicloId → dono e status. */
+async function findCyclesById(
+  cicloIds: string[]
+): Promise<Map<string, { animalId: string; status: string }>> {
+  if (cicloIds.length === 0) return new Map();
+  const cycles = await db.animalCycle.findMany({
+    where: { id: { in: [...new Set(cicloIds)] } },
+    select: { id: true, animalId: true, status: true },
+  });
+  return new Map(cycles.map((c) => [c.id, { animalId: c.animalId, status: c.status }]));
+}
+
+async function findExistingClientIds(clientIds: string[], model: SyncModel): Promise<Set<string>> {
+  if (clientIds.length === 0) return new Set();
 
   const dbModel = db[model] as unknown as {
     findMany: (args: {
@@ -70,114 +191,151 @@ async function findDuplicates(
     }) => Promise<Array<{ clientGeneratedId: string | null }>>;
   };
   const existing = await dbModel.findMany({
-    where: { clientGeneratedId: { in: uniqueIds } },
+    where: { clientGeneratedId: { in: clientIds } },
     select: { clientGeneratedId: true },
   });
 
   return new Set(existing.map((e) => e.clientGeneratedId).filter((id): id is string => id !== null));
 }
 
-/**
- * Processa um batch de registros de forma otimizada.
- * Usa queries em batch para evitar N+1.
- */
-async function processBatch<T extends { clientGeneratedId: string; animalNumero: string; cicloId?: string }>(
-  records: T[],
+/** Pega o clientGeneratedId de um item cru (mesmo inválido) para devolver ao app. */
+function rawClientId(item: unknown): string | null {
+  if (item && typeof item === "object" && "clientGeneratedId" in item) {
+    const id = (item as { clientGeneratedId: unknown }).clientGeneratedId;
+    if (typeof id === "string" && id.length <= 100) return id;
+  }
+  return null;
+}
+
+function rawAnimalNumero(item: unknown): string {
+  if (item && typeof item === "object" && "animalNumero" in item) {
+    const n = (item as { animalNumero: unknown }).animalNumero;
+    if (typeof n === "string") return n.slice(0, 50);
+  }
+  return "?";
+}
+
+async function processType<T extends BaseSyncRecord>(
+  items: unknown[],
+  config: SyncTypeConfig<T>,
   farmId: string,
-  model: "weightRecord" | "vaccination" | "vermifuge" | "vitamin",
-  errorPrefix: string,
-  result: SyncResult,
-  createManyFn: (data: { animalId: string; cicloId: string; records: T[] }) => Promise<number>
+  userId: string,
+  result: SyncResult
 ): Promise<void> {
-  if (records.length === 0) return;
+  if (items.length === 0) return;
 
-  // 1. Buscar duplicatas em batch
-  const duplicates = await findDuplicates(
-    records.map((r) => r.clientGeneratedId),
-    model
+  // O formato "Animal nº X " nas mensagens é mantido para versões antigas
+  // do app, que usam esse texto para decidir o que manter pendente.
+  const reject = (clientId: string | null, numero: string, motivo: string) => {
+    result.erros.push(`${config.label} Animal nº ${numero} : ${motivo}`);
+    if (clientId) result.rejeitados.push(clientId);
+  };
+
+  // 1. Validação individual (um registro ruim não derruba o lote)
+  const valid: T[] = [];
+  const seen = new Set<string>();
+  for (const item of items) {
+    const parsed = config.schema.safeParse(item);
+    if (!parsed.success) {
+      reject(rawClientId(item), rawAnimalNumero(item), parsed.error.issues[0]?.message ?? "Dados inválidos");
+      continue;
+    }
+    // Mesmo clientGeneratedId repetido no próprio lote: conta como duplicado
+    if (seen.has(parsed.data.clientGeneratedId)) {
+      result.duplicados++;
+      continue;
+    }
+    seen.add(parsed.data.clientGeneratedId);
+    valid.push(parsed.data);
+  }
+  if (valid.length === 0) return;
+
+  // 2. Idempotência: o que já existe no servidor é ignorado
+  const existing = await findExistingClientIds(
+    valid.map((r) => r.clientGeneratedId),
+    config.model
   );
-
-  const validRecords = records.filter((r) => {
-    if (duplicates.has(r.clientGeneratedId)) {
+  const fresh = valid.filter((r) => {
+    if (existing.has(r.clientGeneratedId)) {
       result.duplicados++;
       return false;
     }
     return true;
   });
+  if (fresh.length === 0) return;
 
-  if (validRecords.length === 0) return;
-
-  // 2. Buscar animais em batch
-  const animalMap = await findAnimalsByNumeros(
-    validRecords.map((r) => r.animalNumero),
-    farmId
+  // 3. Resolver animal (dentro da fazenda) e ciclo
+  const animalMap = await findAnimalsByNumeros(fresh.map((r) => r.animalNumero), farmId);
+  const activeCycles = await findActiveCycles([...animalMap.values()].map((a) => a.id));
+  const explicitCycles = await findCyclesById(
+    fresh.map((r) => r.cicloId).filter((id): id is string => !!id)
   );
 
-  // 3. Agrupar por animalId para resolver ciclos em batch
-  const animalIds = new Set<string>();
-  for (const record of validRecords) {
+  const groups = new Map<string, Array<{ record: T; animalId: string; cicloId: string; userId: string }>>();
+  for (const record of fresh) {
     const animal = animalMap.get(record.animalNumero);
     if (!animal) {
-      result.erros.push(`${errorPrefix} Animal nº ${record.animalNumero} não encontrado`);
+      reject(record.clientGeneratedId, record.animalNumero, "não encontrado nesta fazenda");
       continue;
     }
-    animalIds.add(animal.id);
-  }
+    if (animal.status !== "ATIVO") {
+      reject(record.clientGeneratedId, record.animalNumero, "não está ativo (vendido ou inativo)");
+      continue;
+    }
 
-  // 4. Resolver ciclos em batch
-  const cicloMap = await resolveCicloIds([...animalIds]);
-
-  // 5. Processar registros válidos
-  const recordsByAnimal = new Map<string, T[]>();
-  for (const record of validRecords) {
-    const animal = animalMap.get(record.animalNumero);
-    if (!animal) continue;
-
-    const cicloId = record.cicloId || cicloMap.get(animal.id);
+    let cicloId: string | undefined;
+    if (record.cicloId) {
+      // Ciclo informado pelo app precisa ser DESTE animal e estar ativo
+      const cycle = explicitCycles.get(record.cicloId);
+      if (!cycle || cycle.animalId !== animal.id) {
+        reject(record.clientGeneratedId, record.animalNumero, "ciclo não pertence a este animal");
+        continue;
+      }
+      if (cycle.status !== "ATIVO") {
+        reject(record.clientGeneratedId, record.animalNumero, "ciclo já encerrado");
+        continue;
+      }
+      cicloId = record.cicloId;
+    } else {
+      cicloId = activeCycles.get(animal.id);
+    }
     if (!cicloId) {
-      result.erros.push(`${errorPrefix} Nenhum ciclo ativo para animal nº ${record.animalNumero}`);
+      reject(record.clientGeneratedId, record.animalNumero, "nenhum ciclo ativo");
       continue;
     }
 
     const key = `${animal.id}:${cicloId}`;
-    if (!recordsByAnimal.has(key)) {
-      recordsByAnimal.set(key, []);
-    }
-    recordsByAnimal.get(key)!.push(record);
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key)!.push({ record, animalId: animal.id, cicloId, userId });
   }
 
-  // 6. Criar registros em batch
-  for (const [key, batch] of recordsByAnimal) {
-    const [animalId, cicloId] = key.split(":");
+  // 4. Gravar por animal/ciclo, atualizando o "atualizadoEm" do animal junto
+  for (const rows of groups.values()) {
     try {
-      const count = await createManyFn({ animalId, cicloId, records: batch });
-      switch (model) {
-        case "weightRecord":
-          result.pesagensProcessadas += count;
-          break;
-        case "vaccination":
-          result.vacinasProcessadas += count;
-          break;
-        case "vermifuge":
-          result.vermifugosProcessados += count;
-          break;
-        case "vitamin":
-          result.vitaminasProcessadas += count;
-          break;
-      }
+      const count = await db.$transaction(async (tx) => {
+        const created = await config.createMany(tx, rows);
+        await tx.animal.update({
+          where: { id: rows[0].animalId },
+          data: { atualizadoEm: new Date() },
+        });
+        return created;
+      });
+      result[config.counter] += count;
     } catch (err) {
-      result.erros.push(
-        `${errorPrefix} Erro ao criar ${batch.length} registros: ${err instanceof Error ? err.message : "Erro desconhecido"}`
-      );
+      console.error(`Sync ${config.label} erro ao gravar:`, err);
+      for (const { record } of rows) {
+        reject(record.clientGeneratedId, record.animalNumero, "erro ao gravar, tente novamente");
+      }
     }
   }
 }
 
 export async function processSync(
   rawPayload: unknown,
-  farmId: string
+  farmId: string,
+  userId: string
 ): Promise<SyncResult> {
-  const validated = syncPayloadSchema.parse(rawPayload) as SyncPayload;
+  const payload = syncPayloadSchema.parse(rawPayload);
   const result: SyncResult = {
     pesagensProcessadas: 0,
     vacinasProcessadas: 0,
@@ -185,106 +343,13 @@ export async function processSync(
     vitaminasProcessadas: 0,
     duplicados: 0,
     erros: [],
+    rejeitados: [],
   };
 
-  // Processar pesagens em batch
-  await processBatch(
-    validated.pesagens,
-    farmId,
-    "weightRecord",
-    "[Pesagem]",
-    result,
-    async ({ animalId, cicloId, records }) => {
-      const data = records.map((r) => ({
-        animalId,
-        cicloId,
-        pesoKg: r.pesoKg,
-        dataPesagem: new Date(r.dataPesagem),
-        observacao: r.observacao,
-        origem: "ANDROID" as const,
-        clientGeneratedId: r.clientGeneratedId,
-        sincronizado: true,
-      }));
-
-      const created = await db.weightRecord.createMany({ data });
-      return created.count;
-    }
-  );
-
-  // Processar vacinas em batch
-  await processBatch(
-    validated.vacinas,
-    farmId,
-    "vaccination",
-    "[Vacina]",
-    result,
-    async ({ animalId, cicloId, records }) => {
-      const data = records.map((r) => ({
-        animalId,
-        cicloId,
-        nomeVacina: r.nomeVacina,
-        dataAplicacao: new Date(r.dataAplicacao),
-        dataProximaDose: r.dataProximaDose ? new Date(r.dataProximaDose) : null,
-        lote: r.lote,
-        observacao: r.observacao,
-        origem: "ANDROID" as const,
-        clientGeneratedId: r.clientGeneratedId,
-      }));
-
-      const created = await db.vaccination.createMany({ data });
-      return created.count;
-    }
-  );
-
-  // Processar vermífugos em batch
-  await processBatch(
-    validated.vermifugos ?? [],
-    farmId,
-    "vermifuge",
-    "[Vermífugo]",
-    result,
-    async ({ animalId, cicloId, records }) => {
-      const data = records.map((r) => ({
-        animalId,
-        cicloId,
-        nomeVermifugo: r.nomeVermifugo,
-        dose: r.dose,
-        dataAplicacao: new Date(r.dataAplicacao),
-        dataProximaDose: r.dataProximaDose ? new Date(r.dataProximaDose) : null,
-        observacao: r.observacao,
-        origem: "ANDROID" as const,
-        clientGeneratedId: r.clientGeneratedId,
-      }));
-
-      const created = await db.vermifuge.createMany({ data });
-      return created.count;
-    }
-  );
-
-  // Processar vitaminas em batch
-  await processBatch(
-    validated.vitaminas ?? [],
-    farmId,
-    "vitamin",
-    "[Vitamina]",
-    result,
-    async ({ animalId, cicloId, records }) => {
-      const data = records.map((r) => ({
-        animalId,
-        cicloId,
-        nomeVitamina: r.nomeVitamina,
-        dose: r.dose,
-        dataAplicacao: new Date(r.dataAplicacao),
-        dataProximaDose: r.dataProximaDose ? new Date(r.dataProximaDose) : null,
-        observacao: r.observacao,
-        origem: "ANDROID" as const,
-        clientGeneratedId: r.clientGeneratedId,
-      }));
-
-      const created = await db.vitamin.createMany({ data });
-      return created.count;
-    }
-  );
+  await processType(payload.pesagens, WEIGHTS, farmId, userId, result);
+  await processType(payload.vacinas, VACCINES, farmId, userId, result);
+  await processType(payload.vermifugos, VERMIFUGES, farmId, userId, result);
+  await processType(payload.vitaminas, VITAMINS, farmId, userId, result);
 
   return result;
 }

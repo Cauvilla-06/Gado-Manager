@@ -136,29 +136,25 @@ void main() {
       });
     });
 
-    test('connection failure falls back to local candidates', () async {
+    test('connection failure does NOT send credentials to other hosts',
+        () async {
+      final contactedHosts = <String>{};
       await withMockClient((auth) async {
-        final base = await auth.login(
-          'https://dead-tunnel.trycloudflare.com',
-          'demo@gado.com',
-          '123456',
+        await expectLater(
+          auth.login(
+            'https://dead-tunnel.trycloudflare.com',
+            'demo@gado.com',
+            '123456',
+          ),
+          throwsA(isA<AuthError>()),
         );
-        expect(base, 'http://10.0.2.2:3000');
+        expect(await auth.token, isNull);
       }, (req) async {
-        if (req.url.host == 'dead-tunnel.trycloudflare.com') {
-          throw Exception('connection refused');
-        }
-        if (req.url.path == '/api/auth/login') {
-          return http.Response(
-            jsonEncode({
-              'token': 'local-token',
-              'user': {'name': 'Local'},
-            }),
-            200,
-          );
-        }
-        return http.Response('not found', 404);
+        contactedHosts.add(req.url.host);
+        throw Exception('connection refused');
       });
+      // A senha só pode ter ido para o endereço digitado pelo usuário
+      expect(contactedHosts, {'dead-tunnel.trycloudflare.com'});
     });
   });
 
@@ -197,6 +193,34 @@ void main() {
         }
         throw Exception('unreachable');
       });
+    });
+
+    test('ignores tunnel url that is not https', () async {
+      await withMockClient((auth) async {
+        await auth.setServerUrl('https://saved.trycloudflare.com');
+
+        final found = await auth.discoverServerUrl();
+        expect(found, 'https://saved.trycloudflare.com');
+      }, (req) async {
+        if (req.url.host == 'saved.trycloudflare.com') {
+          return http.Response(jsonEncode({'url': 'http://evil.example.com'}), 200);
+        }
+        throw Exception('unreachable');
+      });
+    });
+
+    test('background discovery does not probe local network', () async {
+      final contactedHosts = <String>{};
+      await withMockClient((auth) async {
+        await auth.setServerUrl('https://dead.trycloudflare.com');
+
+        final found = await auth.discoverServerUrl(allowLocalProbe: false);
+        expect(found, isNull);
+      }, (req) async {
+        contactedHosts.add(req.url.host);
+        throw Exception('dead tunnel');
+      });
+      expect(contactedHosts, {'dead.trycloudflare.com'});
     });
 
     test('nothing reachable: returns null', () async {

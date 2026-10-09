@@ -1,17 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getAllAnimalsSummary } from "@/services/animal-service";
-import { getCurrentFarm } from "@/lib/farm";
-import { apiHandler, NotFoundError } from "@/lib/api-errors";
+import { requireFarm } from "@/lib/farm";
+import { animalStatusFilterSchema } from "@/lib/validations";
+import { apiHandler } from "@/lib/api-errors";
 
 export const GET = apiHandler(async (request: NextRequest) => {
-  const { farm } = await getCurrentFarm();
-  if (!farm) {
-    throw new NotFoundError("Nenhuma fazenda encontrada");
-  }
+  const { farm } = await requireFarm();
 
   const { searchParams } = new URL(request.url);
   const query = searchParams.get("q");
-  const status = searchParams.get("status") || undefined;
+  const status = animalStatusFilterSchema.parse(searchParams.get("status") || undefined);
 
   let animals;
   if (query) {

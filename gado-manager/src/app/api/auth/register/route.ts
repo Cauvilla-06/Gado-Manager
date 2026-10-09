@@ -1,9 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
+import { randomUUID } from "crypto";
+import { z } from "zod";
 import { db } from "@/lib/db";
 import bcrypt from "bcryptjs";
 import { rateLimitResponse, RATE_LIMITS } from "@/lib/ratelimit";
 import { getClientIp } from "@/lib/client-ip";
 import { sanitizeText } from "@/lib/sanitize";
+import { normalizeEmail } from "@/lib/validations";
+import { findUserByEmail } from "@/lib/users";
+
+const emailSchema = z.string().email().max(254);
 
 export async function POST(request: NextRequest) {
   // Rate limiting: 3 contas por 5 minutos por IP real (anti-spoof)
@@ -14,7 +20,8 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    const { name, email, password, farmName, farmCode } = await request.json();
+    const body = await request.json().catch(() => null);
+    const { name, email, password, farmName, farmCode } = body ?? {};
 
     if (!name || !email || !password) {
       return NextResponse.json(
@@ -23,9 +30,38 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    if (
+      typeof name !== "string" ||
+      typeof email !== "string" ||
+      typeof password !== "string" ||
+      (farmName !== undefined && farmName !== null && typeof farmName !== "string") ||
+      (farmCode !== undefined && farmCode !== null && typeof farmCode !== "string")
+    ) {
+      return NextResponse.json(
+        { error: "Dados inválidos" },
+        { status: 400 }
+      );
+    }
+
+    const cleanEmail = normalizeEmail(email);
+    if (!emailSchema.safeParse(cleanEmail).success) {
+      return NextResponse.json(
+        { error: "Email inválido" },
+        { status: 400 }
+      );
+    }
+
     if (password.length < 8) {
       return NextResponse.json(
         { error: "A senha deve ter pelo menos 8 caracteres" },
+        { status: 400 }
+      );
+    }
+
+    // bcrypt só considera os primeiros 72 bytes; acima disso a senha é truncada
+    if (password.length > 72) {
+      return NextResponse.json(
+        { error: "A senha deve ter no máximo 72 caracteres" },
         { status: 400 }
       );
     }
@@ -38,13 +74,6 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    if (typeof name !== "string" || typeof email !== "string") {
-      return NextResponse.json(
-        { error: "Dados inválidos" },
-        { status: 400 }
-      );
-    }
-
     const cleanName = sanitizeText(name, 100);
     if (!cleanName) {
       return NextResponse.json(
@@ -53,8 +82,8 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Check if user already exists
-    const existing = await db.user.findUnique({ where: { email } });
+    // Check if user already exists (sem diferenciar maiúsculas/minúsculas)
+    const existing = await findUserByEmail(cleanEmail);
     if (existing) {
       return NextResponse.json(
         { error: "Já existe uma conta com este email" },
@@ -68,7 +97,7 @@ export async function POST(request: NextRequest) {
     const result = await db.$transaction(async (tx) => {
       // Create user
       const user = await tx.user.create({
-        data: { name: cleanName, email, passwordHash },
+        data: { name: cleanName, email: cleanEmail, passwordHash },
       });
 
       let farm;
@@ -81,20 +110,15 @@ export async function POST(request: NextRequest) {
         }
         // Segurança: entrada na fazenda exige APROVAÇÃO do dono.
         // Cria um pedido PENDENTE em vez de membership direto (fecha bypass via farmCode).
-        const alreadyPending = await tx.farmRequest.findFirst({
-          where: { userId: user.id, farmId: farm.id, status: "PENDENTE" },
+        await tx.farmRequest.create({
+          data: { userId: user.id, farmId: farm.id, status: "PENDENTE" },
         });
-        if (!alreadyPending) {
-          await tx.farmRequest.create({
-            data: { userId: user.id, farmId: farm.id, status: "PENDENTE" },
-          });
-        }
       } else {
-        // Create a new farm for the user
-        const newFarmCode = `fazenda-${Math.random().toString(36).substring(2, 8)}`;
+        // Create a new farm for the user (código aleatório criptográfico, difícil de adivinhar)
+        const newFarmCode = `fazenda-${randomUUID().replace(/-/g, "").slice(0, 10)}`;
         farm = await tx.farm.create({
           data: {
-            name: farmName ? sanitizeText(farmName, 120) || `${cleanName} - Fazenda` : `${cleanName} - Fazenda`,
+            name: (farmName && sanitizeText(farmName, 120)) || `${cleanName} - Fazenda`,
             code: newFarmCode,
           },
         });
@@ -115,6 +139,14 @@ export async function POST(request: NextRequest) {
     if (error instanceof Error && error.message === "FarmNotFound") {
       return NextResponse.json(
         { error: "Fazenda não encontrada com este código" },
+        { status: 400 }
+      );
+    }
+
+    // Corrida: outro cadastro com o mesmo e-mail entrou entre a checagem e o create
+    if (error && typeof error === "object" && "code" in error && error.code === "P2002") {
+      return NextResponse.json(
+        { error: "Já existe uma conta com este email" },
         { status: 400 }
       );
     }
