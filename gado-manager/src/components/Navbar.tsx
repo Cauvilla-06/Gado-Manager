@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useState, useEffect } from "react";
 import { LogOut, Beef, ChevronDown, Users, UserCog } from "lucide-react";
+import { clearDataCache } from "@/lib/use-cached-data";
 
 interface FarmInfo {
   id: string;
@@ -28,15 +29,38 @@ export default function Navbar() {
   const [pendingRequests, setPendingRequests] = useState(0);
   const [loading, setLoading] = useState(true);
 
-  // Fetch current user on mount
+  // Fetch current user on mount — com cache em sessionStorage para não
+  // recarregar tudo a cada F5 / troca de fazenda.
   useEffect(() => {
     async function fetchUser() {
       try {
+        const cached = sessionStorage.getItem("gm:user");
+        if (cached) {
+          setUser(JSON.parse(cached));
+          setLoading(false);
+          // Revalida em background para pegar mudanças de sessão.
+          const res = await fetch("/api/auth/me", { credentials: "include" });
+          if (res.ok) {
+            const data = await res.json();
+            if (data.user) {
+              setUser(data.user);
+              sessionStorage.setItem("gm:user", JSON.stringify(data.user));
+            } else {
+              sessionStorage.removeItem("gm:user");
+              setUser(null);
+            }
+          } else if (res.status === 401) {
+            sessionStorage.removeItem("gm:user");
+            setUser(null);
+          }
+          return;
+        }
         const res = await fetch("/api/auth/me", { credentials: "include" });
         if (!res.ok) return;
         const data = await res.json();
         if (data.user) {
           setUser(data.user);
+          sessionStorage.setItem("gm:user", JSON.stringify(data.user));
         }
       } catch {
         // Not authenticated
@@ -53,9 +77,22 @@ export default function Navbar() {
 
     async function loadFarms() {
       try {
+        const cached = sessionStorage.getItem("gm:farms");
+        if (cached) {
+          applyFarms(JSON.parse(cached));
+        }
         const res = await fetch("/api/farms", { credentials: "include" });
         const data = await res.json();
         if (Array.isArray(data)) {
+          sessionStorage.setItem("gm:farms", JSON.stringify(data));
+          applyFarms(data);
+        }
+      } catch (err) {
+        console.error(err);
+      }
+    }
+
+    function applyFarms(data: FarmInfo[]) {
           setFarms(data);
           if (data.length > 0) {
             const selectedFarmId = document.cookie
@@ -68,10 +105,6 @@ export default function Navbar() {
             setCurrentFarm(farm);
           }
         }
-      } catch (err) {
-        console.error(err);
-      }
-    }
     loadFarms();
   }, [user]);
 
@@ -94,6 +127,8 @@ export default function Navbar() {
   }, [currentFarm]);
 
   async function handleLogout() {
+    sessionStorage.removeItem("gm:user");
+    sessionStorage.removeItem("gm:farms");
     await fetch("/api/auth/logout", { method: "POST" });
     window.location.href = "/login"; // eslint-disable-line @next/next/no-location-assign-relative-destination
   }
@@ -199,6 +234,9 @@ export default function Navbar() {
                               headers: { "Content-Type": "application/json" },
                               body: JSON.stringify({ farmId: f.id }),
                             });
+                            // Dados pertencem à fazenda: limpa caches.
+                            sessionStorage.removeItem("gm:farms");
+                            clearDataCache();
                             window.location.reload();
                           }}
                           className={`w-full text-left rounded-md px-2 py-2 text-sm transition-colors ${

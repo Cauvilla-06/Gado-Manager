@@ -33,6 +33,24 @@ export class UnauthorizedError extends AppError {
 }
 
 /**
+ * Erro para conflito de recursos (ex: registro duplicado).
+ */
+export class ConflictError extends AppError {
+  constructor(message: string = "Registro já existe") {
+    super(message, 409, "CONFLICT");
+  }
+}
+
+/**
+ * Erro de validação de regra de negócio (400 com mensagem amigável).
+ */
+export class ValidationError extends AppError {
+  constructor(message: string = "Dados inválidos") {
+    super(message, 400, "VALIDATION_ERROR");
+  }
+}
+
+/**
  * Erro para acesso proibido.
  */
 export class ForbiddenError extends AppError {

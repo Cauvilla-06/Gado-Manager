@@ -108,29 +108,35 @@ const nextConfig: NextConfig = {
       },
       {
         // Aplicar headers em todas as rotas da API
+        // CORS restrito (audit 3.2): sem Allow-Origin * quando se usa credenciais.
+        // O CORS_ORIGIN define domínios permitidos; padrão: mesmo origem (sem header CORS).
         source: "/api/:path*",
         headers: [
           ...securityHeaders,
-          {
-            key: "Access-Control-Allow-Origin",
-            value: process.env.CORS_ORIGIN || "*",
-          },
-          {
-            key: "Access-Control-Allow-Methods",
-            value: "GET, POST, PUT, DELETE, OPTIONS",
-          },
-          {
-            key: "Access-Control-Allow-Headers",
-            value: "Content-Type, Authorization, X-User-Id",
-          },
-          {
-            key: "Access-Control-Allow-Credentials",
-            value: "true",
-          },
-          {
-            key: "Access-Control-Max-Age",
-            value: "86400",
-          },
+          ...(process.env.CORS_ORIGIN
+            ? [
+                {
+                  key: "Access-Control-Allow-Origin",
+                  value: process.env.CORS_ORIGIN,
+                },
+                {
+                  key: "Access-Control-Allow-Methods",
+                  value: "GET, POST, PUT, DELETE, OPTIONS",
+                },
+                {
+                  key: "Access-Control-Allow-Headers",
+                  value: "Content-Type, Authorization",
+                },
+                {
+                  key: "Access-Control-Allow-Credentials",
+                  value: "true",
+                },
+                {
+                  key: "Access-Control-Max-Age",
+                  value: "86400",
+                },
+              ]
+            : []),
         ],
       },
       {

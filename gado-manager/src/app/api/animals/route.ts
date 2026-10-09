@@ -1,7 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getAllAnimals, createAnimal, searchAnimals } from "@/services/animal-service";
+import { z } from "zod";
+import {
+  getAllAnimals,
+  createAnimal,
+  searchAnimals,
+  deleteAnimalsBatch,
+} from "@/services/animal-service";
 import { getCurrentFarm } from "@/lib/farm";
-import { apiHandler, NotFoundError } from "@/lib/api-errors";
+import { apiHandler, NotFoundError, ForbiddenError } from "@/lib/api-errors";
+import { userCanWriteToFarm } from "@/lib/ownership";
+
+const batchDeleteSchema = z.object({
+  ids: z.array(z.string().min(1)).min(1).max(1000),
+});
 
 export const GET = apiHandler(async (request: NextRequest) => {
   const { farm } = await getCurrentFarm();
@@ -24,12 +35,40 @@ export const GET = apiHandler(async (request: NextRequest) => {
 });
 
 export const POST = apiHandler(async (request: NextRequest) => {
-  const { farm } = await getCurrentFarm();
-  if (!farm) {
+  const { user, farm } = await getCurrentFarm();
+  if (!farm || !user) {
     throw new NotFoundError("Nenhuma fazenda encontrada");
+  }
+
+  // Role validation: MEMBER é somente leitura
+  const canWrite = await userCanWriteToFarm(user.id, farm.id);
+  if (!canWrite) {
+    throw new ForbiddenError("Seu nível de acesso não permite cadastrar animais");
   }
 
   const body = await request.json();
   const result = await createAnimal(body, farm.id);
   return NextResponse.json(result, { status: 201 });
+});
+
+/**
+ * DELETE /api/animals
+ * Exclui vários animais de uma vez (bot de exclusão).
+ * Body: { ids: ["uuid1", "uuid2", ...] }
+ */
+export const DELETE = apiHandler(async (request: NextRequest) => {
+  const { user, farm } = await getCurrentFarm();
+  if (!farm || !user) {
+    throw new NotFoundError("Nenhuma fazenda encontrada");
+  }
+
+  const canWrite = await userCanWriteToFarm(user.id, farm.id);
+  if (!canWrite) {
+    throw new ForbiddenError("Seu nível de acesso não permite excluir animais");
+  }
+
+  const body = batchDeleteSchema.parse(await request.json());
+  const result = await deleteAnimalsBatch(body.ids, farm.id);
+
+  return NextResponse.json(result);
 });

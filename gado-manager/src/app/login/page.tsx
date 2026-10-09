@@ -31,10 +31,10 @@ export default function LoginPage() {
         return;
       }
 
-      // Success — wait a tick for the cookie to be stored, then redirect
+      // Success — wait a tick for the cookie to be stored, then navigate away.
+      // Dropped router.refresh() to avoid a dashboard reload loop right after login.
       await new Promise((r) => setTimeout(r, 100));
-      router.push("/");
-      router.refresh();
+      router.replace("/");
     } catch {
       setError("Erro ao fazer login");
     } finally {

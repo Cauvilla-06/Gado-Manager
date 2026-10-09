@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, use } from "react";
+import { useState, use } from "react";
 import Link from "next/link";
 import {
   ArrowLeft,
@@ -26,6 +26,7 @@ import {
   Tooltip,
   ResponsiveContainer,
 } from "@/components/shared/DynamicRecharts";
+import { useCachedData, clearDataCache } from "@/lib/use-cached-data";
 
 interface UserData {
   id: string;
@@ -98,8 +99,29 @@ export default function AnimalDetailPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = use(params);
-  const [animal, setAnimal] = useState<AnimalData | null>(null);
-  const [loading, setLoading] = useState(true);
+  // Cache por animal: voltar para a ficha do boi é instantâneo.
+  const {
+    data: animal,
+    loading,
+    refresh: loadAnimal,
+    error,
+  } = useCachedData<AnimalData>(
+    `animal:${id}`,
+    async () => {
+      const res = await fetch(`/api/animals/${id}`);
+      if (!res.ok) throw new Error("Animal não encontrado");
+      return res.json();
+    },
+    15_000
+  );
+
+  function invalidateAnimalCaches() {
+    // Dados do animal e listas agregadas mudaram: força revalidação nas outras páginas.
+    clearDataCache("animal:");
+    clearDataCache("animals:");
+    clearDataCache("dashboard:");
+  }
+
   const [showSellDialog, setShowSellDialog] = useState(false);
   const [showNewCycleDialog, setShowNewCycleDialog] = useState(false);
   const [showWeightForm, setShowWeightForm] = useState(false);
@@ -134,23 +156,6 @@ export default function AnimalDetailPage({
   });
   const [actionLoading, setActionLoading] = useState(false);
   const [message, setMessage] = useState({ text: "", type: "" });
-
-  async function loadAnimal() {
-    try {
-      const res = await fetch(`/api/animals/${id}`);
-      if (!res.ok) throw new Error("Animal não encontrado");
-      const data = await res.json();
-      setAnimal(data);
-    } catch (err) {
-      console.error(err);
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  useEffect(() => {
-    loadAnimal(); // eslint-disable-line react-hooks/set-state-in-effect
-  }, [id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const activeCycle = animal?.ciclos.find((c) => c.status === "ATIVO");
   const currentCycle = activeCycle || animal?.ciclos[0];
@@ -199,6 +204,7 @@ export default function AnimalDetailPage({
 
   async function handleSell() {
     setActionLoading(true);
+    invalidateAnimalCaches();
     try {
       const res = await fetch(`/api/animals/${id}/sell`, { method: "POST" });
       if (!res.ok) {
@@ -220,6 +226,7 @@ export default function AnimalDetailPage({
 
   async function handleNewCycle() {
     setActionLoading(true);
+    invalidateAnimalCaches();
     try {
       const res = await fetch(`/api/animals/${id}/cycles`, {
         method: "POST",
@@ -247,6 +254,7 @@ export default function AnimalDetailPage({
     e.preventDefault();
     if (!currentCycle) return;
     setActionLoading(true);
+    invalidateAnimalCaches();
     try {
       const res = await fetch(`/api/animals/${id}/weights`, {
         method: "POST",
@@ -280,6 +288,7 @@ export default function AnimalDetailPage({
     e.preventDefault();
     if (!currentCycle) return;
     setActionLoading(true);
+    invalidateAnimalCaches();
     try {
       const res = await fetch(`/api/animals/${id}/vaccinations`, {
         method: "POST",
@@ -321,6 +330,7 @@ export default function AnimalDetailPage({
     e.preventDefault();
     if (!currentCycle) return;
     setActionLoading(true);
+    invalidateAnimalCaches();
     try {
       const res = await fetch(`/api/animals/${id}/vermifuges`, {
         method: "POST",
@@ -356,6 +366,7 @@ export default function AnimalDetailPage({
     e.preventDefault();
     if (!currentCycle) return;
     setActionLoading(true);
+    invalidateAnimalCaches();
     try {
       const res = await fetch(`/api/animals/${id}/vitamins`, {
         method: "POST",
@@ -397,6 +408,25 @@ export default function AnimalDetailPage({
           ))}
         </div>
         <div className="h-80 bg-muted rounded-xl animate-pulse" />
+      </div>
+    );
+  }
+
+  if (!animal && error) {
+    return (
+      <div className="flex flex-col items-center justify-center rounded-xl border border-dashed py-16 text-center">
+        <AlertTriangle className="h-12 w-12 text-red-400 mb-4" />
+        <h2 className="font-medium text-lg">Erro ao carregar o animal</h2>
+        <p className="text-sm text-muted-foreground mt-1 mb-4 max-w-md">
+          {error.message} — verifique se o servidor está rodando.
+        </p>
+        <button
+          onClick={() => loadAnimal()}
+          className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
+        >
+          <RefreshCw className="h-4 w-4" />
+          Tentar novamente
+        </button>
       </div>
     );
   }

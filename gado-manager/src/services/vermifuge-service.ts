@@ -1,4 +1,5 @@
 import { db } from "@/lib/db";
+import { ValidationError } from "@/lib/api-errors";
 
 export async function getVermifugesByAnimal(animalId: string, cicloId?: string) {
   const where: Record<string, string> = { animalId };
@@ -24,10 +25,10 @@ export async function createVermifuge(data: {
   observacao?: string;
 }) {
   if (!data.nomeVermifugo) {
-    throw new Error("Nome do vermífugo é obrigatório");
+    throw new ValidationError("Nome do vermífugo é obrigatório");
   }
   if (!data.dataAplicacao) {
-    throw new Error("Data de aplicação é obrigatória");
+    throw new ValidationError("Data de aplicação é obrigatória");
   }
 
   return db.vermifuge.create({

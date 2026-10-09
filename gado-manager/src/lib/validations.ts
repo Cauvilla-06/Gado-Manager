@@ -1,10 +1,20 @@
 import { z } from "zod";
 
-export const animalSchema = z.object({
-  numeroIdentificacao: z
+// Bloqueia construtos de XSS/templating na origem (audit 3.1):
+// tags HTML, handlers on*, javascript:, {{...}}, ${...}, <%...%>
+const FORBIDDEN_INPUT = /<[^>]*>|\bon\w+\s*=|javascript\s*:|\{\{[^}]*\}\}|\$\{[^}]*\}|<%[\s\S]*?%>/i;
+
+const safeText = (max: number) =>
+  z
     .string()
-    .min(1, "Número de identificação é obrigatório")
-    .max(50, "Número muito longo"),
+    .transform((v) => v.trim())
+    .refine((v) => !FORBIDDEN_INPUT.test(v), "Conteúdo contém caracteres não permitidos")
+    .refine((v) => v.length <= max, `Texto muito longo (máx ${max})`);
+
+export const animalSchema = z.object({
+  numeroIdentificacao: safeText(50)
+    .refine((v) => v.length >= 1, "Número de identificação é obrigatório")
+    .refine((v) => /^[\p{L}\p{N}\-_\/. ]+$/u.test(v), "Número contém caracteres inválidos"),
 });
 
 export const weightRecordSchema = z.object({
@@ -15,7 +25,7 @@ export const weightRecordSchema = z.object({
     .positive("Peso deve ser maior que zero")
     .max(2000, "Peso excessivamente alto. Verifique o valor informado."),
   dataPesagem: z.string().min(1, "Data da pesagem é obrigatória"),
-  observacao: z.string().optional(),
+  observacao: safeText(500).optional(),
   origem: z.enum(["WEB", "ANDROID"]).default("WEB"),
   clientGeneratedId: z.string().uuid().optional(),
 });
@@ -23,21 +33,19 @@ export const weightRecordSchema = z.object({
 export const vaccinationSchema = z.object({
   animalId: z.string().uuid("ID do animal inválido"),
   cicloId: z.string().uuid("ID do ciclo inválido"),
-  nomeVacina: z
-    .string()
-    .min(1, "Nome da vacina é obrigatório")
-    .max(200, "Nome muito longo"),
+  nomeVacina: safeText(200)
+    .refine((v) => v.length >= 1, "Nome da vacina é obrigatório"),
   dataAplicacao: z.string().min(1, "Data de aplicação é obrigatória"),
   dataProximaDose: z.string().optional(),
-  lote: z.string().optional(),
-  observacao: z.string().optional(),
+  lote: safeText(100).optional(),
+  observacao: safeText(500).optional(),
   origem: z.enum(["WEB", "ANDROID"]).default("WEB"),
   clientGeneratedId: z.string().uuid().optional(),
 });
 
 export const cycleSchema = z.object({
   animalId: z.string().uuid("ID do animal inválido"),
-  observacoes: z.string().optional(),
+  observacoes: safeText(500).optional(),
 });
 
 export const sellAnimalSchema = z.object({

@@ -1,4 +1,5 @@
 import { db } from "@/lib/db";
+import { ValidationError } from "@/lib/api-errors";
 
 export async function getVitaminsByAnimal(animalId: string, cicloId?: string) {
   const where: Record<string, string> = { animalId };
@@ -24,10 +25,10 @@ export async function createVitamin(data: {
   observacao?: string;
 }) {
   if (!data.nomeVitamina) {
-    throw new Error("Nome da vitamina é obrigatório");
+    throw new ValidationError("Nome da vitamina é obrigatório");
   }
   if (!data.dataAplicacao) {
-    throw new Error("Data de aplicação é obrigatória");
+    throw new ValidationError("Data de aplicação é obrigatória");
   }
 
   return db.vitamin.create({

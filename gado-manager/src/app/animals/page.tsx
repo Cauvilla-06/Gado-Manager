@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import Link from "next/link";
-import { Plus, Search, TrendingUp, TrendingDown, Beef } from "lucide-react";
+import { Plus, Search, TrendingUp, TrendingDown, Beef, RefreshCw, AlertTriangle } from "lucide-react";
+import { useCachedData, clearDataCache } from "@/lib/use-cached-data";
 
 interface AnimalItem {
   id: string;
@@ -16,18 +17,13 @@ interface AnimalItem {
 }
 
 export default function AnimalsPage() {
-  const [animals, setAnimals] = useState<AnimalItem[]>([]);
-  const [searchQuery, setSearchQuery] = useState("");
-  const [filterStatus, setFilterStatus] = useState("all");
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    async function load() {
-      try {
-        const res = await fetch("/api/animals/summary");
-        const data = await res.json();
-
-        const items: AnimalItem[] = data.map((a: {
+  // Cache: voltar para a lista de animais é instantâneo.
+  const { data: animals, loading, refreshing, refresh, error } = useCachedData<AnimalItem[]>(
+    "animals:summary",
+    async () => {
+      const res = await fetch("/api/animals/summary");
+      const data = await res.json();
+      return data.map((a: {
           id: string;
           numeroIdentificacao: string;
           status: string;
@@ -73,18 +69,14 @@ export default function AnimalsPage() {
             cicloAtual: activeCycle?.numeroCiclo || null,
           };
         });
+    },
+    15_000
+  );
 
-        setAnimals(items);
-      } catch (err) {
-        console.error(err);
-      } finally {
-        setLoading(false);
-      }
-    }
-    load();
-  }, []);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [filterStatus, setFilterStatus] = useState("all");
 
-  const filtered = animals.filter((a) => {
+  const filtered = (animals ?? []).filter((a) => {
     const matchSearch =
       !searchQuery ||
       a.numeroIdentificacao.toLowerCase().includes(searchQuery.toLowerCase());
@@ -99,16 +91,31 @@ export default function AnimalsPage() {
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Animais</h1>
           <p className="text-sm text-muted-foreground">
-            {animals.length} animal(ns) cadastrado(s)
+            {animals?.length ?? 0} animal(ns) cadastrado(s)
           </p>
         </div>
-        <Link
-          href="/animals/new"
-          className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2.5 text-sm font-medium text-primary-foreground shadow-sm hover:bg-primary/90 transition-colors"
-        >
-          <Plus className="h-4 w-4" />
-          Novo Animal
-        </Link>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => {
+              clearDataCache("animals");
+              refresh();
+            }}
+            className={`rounded-lg p-2 text-muted-foreground hover:bg-accent transition-colors ${
+              refreshing ? "animate-spin" : ""
+            }`}
+            title="Atualizar"
+          >
+            <RefreshCw className="h-4 w-4" />
+          </button>
+          <Link
+            href="/animals/new"
+            className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2.5 text-sm font-medium text-primary-foreground shadow-sm hover:bg-primary/90 transition-colors"
+            onClick={() => clearDataCache("animals")}
+          >
+            <Plus className="h-4 w-4" />
+            Novo Animal
+          </Link>
+        </div>
       </div>
 
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
@@ -138,6 +145,21 @@ export default function AnimalsPage() {
           {[1, 2, 3].map((i) => (
             <div key={i} className="h-28 bg-muted rounded-xl animate-pulse" />
           ))}
+        </div>
+      ) : error && (animals ?? []).length === 0 ? (
+        <div className="flex flex-col items-center justify-center rounded-xl border border-dashed py-16 text-center">
+          <AlertTriangle className="h-12 w-12 text-red-400 mb-4" />
+          <h3 className="font-medium text-lg">Erro ao carregar os animais</h3>
+          <p className="text-sm text-muted-foreground mt-1 mb-4 max-w-md">
+            {error.message} — verifique se o servidor está rodando.
+          </p>
+          <button
+            onClick={() => refresh()}
+            className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
+          >
+            <RefreshCw className="h-4 w-4" />
+            Tentar novamente
+          </button>
         </div>
       ) : filtered.length === 0 ? (
         <div className="flex flex-col items-center justify-center rounded-xl border border-dashed py-16">

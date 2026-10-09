@@ -1,16 +1,19 @@
 "use client";
 
-import { useEffect, useState, useMemo, useCallback } from "react";
+import { useState, useMemo } from "react";
+import { useCachedData, clearDataCache } from "@/lib/use-cached-data";
 import Link from "next/link";
 import {
   Plus,
   TrendingUp,
+  RefreshCw,
   TrendingDown,
   Beef,
   Syringe,
   BarChart3,
   Search,
   ShoppingCart,
+  AlertTriangle,
 } from "lucide-react";
 
 interface DashboardStats {
@@ -138,34 +141,41 @@ function AnimalCard({ animal }: { animal: AnimalListItem }) {
 }
 
 export default function HomePage() {
-  const [stats, setStats] = useState<DashboardStats | null>(null);
-  const [animals, setAnimals] = useState<AnimalListItem[]>([]);
+  // Dados em cache: navegar de volta ao dashboard é instantâneo.
+  const { data, loading, refreshing, refresh, error } = useCachedData<{
+    stats: { totalAtivos: number; totalVendidos: number };
+    animals: AnimalListItem[];
+  }>(
+    "dashboard:stats",
+    async () => {
+      const res = await fetch("/api/dashboard/stats");
+      const d = res.ok
+        ? await res.json()
+        : { stats: { totalAtivos: 0, totalVendidos: 0 }, animals: [] };
+      return {
+        stats: {
+          totalAtivos: d.stats.totalAtivos,
+          totalVendidos: d.stats.totalVendidos,
+        },
+        animals: d.animals,
+      };
+    },
+    15_000
+  );
+
+  const stats: DashboardStats | null = data
+    ? {
+        totalAtivos: data.stats.totalAtivos,
+        totalVendidos: data.stats.totalVendidos,
+        totalPesagens: 0,
+        totalVacinas: 0,
+      }
+    : null;
   const [searchQuery, setSearchQuery] = useState("");
   const [filterStatus, setFilterStatus] = useState("all");
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    async function loadData() {
-      try {
-        const res = await fetch("/api/dashboard/stats");
-        const data = res.ok ? await res.json() : { stats: { totalAtivos: 0, totalVendidos: 0 }, animals: [] };
-        setStats({
-          totalAtivos: data.stats.totalAtivos,
-          totalVendidos: data.stats.totalVendidos,
-          totalPesagens: 0, // Not needed on dashboard anymore
-          totalVacinas: 0, // Not needed on dashboard anymore
-        });
-        setAnimals(data.animals);
-      } catch (err) {
-        console.error("Error loading dashboard:", err);
-      } finally {
-        setLoading(false);
-      }
-    }
-    loadData();
-  }, []);
 
   const filteredAnimals = useMemo(() => {
+    const animals = data?.animals ?? [];
     return animals.filter((a) => {
       const matchesSearch =
         !searchQuery ||
@@ -174,7 +184,7 @@ export default function HomePage() {
         filterStatus === "all" || a.status === filterStatus;
       return matchesSearch && matchesStatus;
     });
-  }, [animals, searchQuery, filterStatus]);
+  }, [data, searchQuery, filterStatus]);
 
   if (loading) {
     return (
@@ -193,6 +203,25 @@ export default function HomePage() {
     );
   }
 
+  if (error && !stats) {
+    return (
+      <div className="flex flex-col items-center justify-center rounded-xl border border-dashed py-16 text-center">
+        <AlertTriangle className="h-12 w-12 text-red-400 mb-4" />
+        <h3 className="font-medium text-lg">Erro ao carregar o dashboard</h3>
+        <p className="text-sm text-muted-foreground mt-1 mb-4 max-w-md">
+          {error.message} — verifique se o servidor está rodando.
+        </p>
+        <button
+          onClick={() => refresh()}
+          className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
+        >
+          <RefreshCw className="h-4 w-4" />
+          Tentar novamente
+        </button>
+      </div>
+    );
+  }
+
 
   return (
     <div className="space-y-6 animate-fade-in">
@@ -203,9 +232,22 @@ export default function HomePage() {
             Visão geral do rebanho
           </p>
         </div>
+        <button
+          onClick={() => {
+            clearDataCache("dashboard");
+            refresh();
+          }}
+          className={`rounded-lg p-2 text-muted-foreground hover:bg-accent transition-colors ${
+            refreshing ? "animate-spin" : ""
+          }`}
+          title="Atualizar"
+        >
+          <RefreshCw className="h-4 w-4" />
+        </button>
         <Link
           href="/animals/new"
           className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2.5 text-sm font-medium text-primary-foreground shadow-sm hover:bg-primary/90 transition-colors"
+          onClick={() => clearDataCache("dashboard")}
         >
           <Plus className="h-4 w-4" />
           <span className="hidden sm:inline">Novo Animal</span>

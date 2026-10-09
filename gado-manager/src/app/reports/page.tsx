@@ -215,7 +215,7 @@ export default function ReportsPage() {
       ["Peso Atual Médio", report.pesoAtualMedio > 0 ? `${report.pesoAtualMedio.toFixed(1)} kg` : "—"],
       ["Ganho Médio", report.ganhoMedio > 0 ? `+${report.ganhoMedio.toFixed(1)} kg` : "—"],
       ["Maior Ganho", report.maiorGanho > 0 ? `+${report.maiorGanho.toFixed(1)} kg` : "—"],
-      ["Menor Ganho", report.menorGanho !== 0 ? `${report.menorGanho.toFixed(1)} kg` : "—"],
+      ["Menor Ganho", report.menorGanho !== null && report.menorGanho !== 0 ? `${report.menorGanho.toFixed(1)} kg` : "—"],
     ];
 
     autoTable(doc, {
@@ -747,7 +747,7 @@ export default function ReportsPage() {
             <div className="rounded-xl border bg-card p-4 shadow-sm text-center">
               <p className="text-xs text-muted-foreground">Menor Ganho</p>
               <p className="text-xl font-bold">
-                {report.menorGanho !== 0
+                {report.menorGanho !== null && report.menorGanho !== 0
                   ? `${report.menorGanho.toFixed(1)} kg`
                   : "—"}
               </p>

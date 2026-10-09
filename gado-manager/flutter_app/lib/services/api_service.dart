@@ -8,6 +8,18 @@ import 'package:uuid/uuid.dart';
 
 import '../models.dart';
 
+/// Erro de aplicação com mensagem amigável para o usuário
+/// (credenciais inválidas, rate limit, servidor inacessível).
+/// Diferencia-se de erros de rede para o login não fazer fallback
+/// quando as credenciais estão erradas.
+class AuthError implements Exception {
+  final String message;
+  AuthError(this.message);
+
+  @override
+  String toString() => message;
+}
+
 /// Resultado da sincronização com o servidor.
 class SyncResultSummary {
   final int enviados;
@@ -30,20 +42,49 @@ class AuthService {
   static const _kToken = 'auth_token';
   static const _kUserName = 'user_name';
 
-  Future<String?> get serverUrl async {
-    final prefs = await SharedPreferences.getInstance();
-    return prefs.getString(_kServerUrl);
-  }
+  /// Cliente HTTP injetável (permite MockClient nos testes).
+  final http.Client _client;
 
-  /// Save the server URL to SharedPreferences.
-  Future<void> setServerUrl(String url) async {
+  AuthService({http.Client? client}) : _client = client ?? http.Client();
+
+  /// Normaliza a URL do servidor digitada/descoberta.
+  ///
+  /// - Adiciona protocolo quando falta
+  /// - Hosts de tunnel (*.trycloudflare.com, ngrok etc) SEMPRE usam https://
+  ///   (http:// no tunnel recebe 301 e o corpo do POST é descartado,
+  ///   o que quebra o login do app)
+  /// - Remove barra final
+  static String normalizeUrl(String url) {
     var base = url.trim();
+    if (base.isEmpty) return base;
+
+    final looksLikeTunnel = RegExp(
+      r'^(https?://)?([a-z0-9-]+\.)?(trycloudflare\.com|loca\.lt|ngrok\.(io|app|dev)|ngrok-free\.app|use\.tunnelmole\.com)\b',
+      caseSensitive: false,
+    ).hasMatch(base);
+
+    if (looksLikeTunnel) {
+      base = base.replaceFirst(RegExp(r'^https?://', caseSensitive: false), '');
+      return 'https://${base.replaceAll(RegExp(r'/+$'), '')}';
+    }
+
     if (!base.startsWith('http://') && !base.startsWith('https://')) {
       base = 'http://$base';
     }
     while (base.endsWith('/')) {
       base = base.substring(0, base.length - 1);
     }
+    return base;
+  }
+
+  Future<String?> get serverUrl async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString(_kServerUrl);
+  }
+
+  /// Save the server URL to SharedPreferences (normalizada).
+  Future<void> setServerUrl(String url) async {
+    final base = normalizeUrl(url);
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_kServerUrl, base);
   }
@@ -53,13 +94,12 @@ class AuthService {
   ///
   /// Prioridade:
   /// 1. Tenta a URL salva (pode ser um tunnel ativo)
-  /// 2. Busca o servidor na rede local e obtém a URL do tunnel mais recente
+  /// 2. Sonda os candidatos locais EM PARALELO e usa o primeiro acessível
   ///
   /// Quando encontra o servidor local, busca automaticamente a URL
   /// atualizada do Cloudflare Tunnel e salva para uso futuro.
   Future<String?> discoverServerUrl() async {
-    // Endereços comuns de rede local para tentar
-    final localCandidates = [
+    const candidates = [
       'http://10.0.2.2:3000',      // Android emulator
       'http://localhost:3000',      // Same machine
       'http://127.0.0.1:3000',     // Same machine
@@ -72,47 +112,68 @@ class AuthService {
     // 1. Tenta a URL salva primeiro (pode ser tunnel ativo)
     final savedUrl = await serverUrl;
     if (savedUrl != null && savedUrl.isNotEmpty) {
-      try {
-        final response = await http
-            .get(Uri.parse('$savedUrl/api/config/server-url'))
-            .timeout(const Duration(seconds: 3));
-        if (response.statusCode == 200) {
-          final body = jsonDecode(response.body) as Map<String, dynamic>;
-          final tunnelUrl = body['url'] as String?;
-          if (tunnelUrl != null && tunnelUrl.isNotEmpty) {
-            // Atualiza URL salva se o tunnel mudou
-            await setServerUrl(tunnelUrl);
-            return tunnelUrl;
-          }
-          return savedUrl;
+      if (await pingServer(savedUrl)) {
+        // Atualiza a URL salva se o tunnel mudou
+        final tunnelUrl = await _fetchTunnelUrlFrom(savedUrl);
+        if (tunnelUrl != null && tunnelUrl.isNotEmpty &&
+            tunnelUrl != savedUrl) {
+          await setServerUrl(tunnelUrl);
+          return tunnelUrl;
         }
-      } catch (_) {
-        // URL salva não está mais acessível, tenta rede local
+        return savedUrl;
       }
     }
 
-    // 2. Tenta rede local para pegar a URL mais recente do tunnel
-    for (final candidate in localCandidates) {
+    // 2. Sonda os candidatos locais em paralelo — muito mais rápido que
+    //    testar um por um (que podia levar ~20s quando tudo falhava).
+    final probes = candidates.map((candidate) async {
       try {
-        final response = await http
+        final response = await _client
             .get(Uri.parse('$candidate/api/config/server-url'))
             .timeout(const Duration(seconds: 2));
-        if (response.statusCode == 200) {
-          final body = jsonDecode(response.body) as Map<String, dynamic>;
-          final tunnelUrl = body['url'] as String?;
-          if (tunnelUrl != null && tunnelUrl.isNotEmpty) {
-            // Sempre atualiza com a URL mais recente do tunnel
-            await setServerUrl(tunnelUrl);
-            return tunnelUrl;
-          }
-          // Servidor local acessível mas sem tunnel configurado
-          return candidate;
-        }
+        if (response.statusCode == 200) return candidate;
       } catch (_) {
-        // Não acessível, tenta próximo
+        // Não acessível
       }
-    }
+      return null;
+    });
+    final results = await Future.wait(probes);
+    final reachable = results.whereType<String>().toList();
+    if (reachable.isEmpty) return null;
 
+    // Prefere o host do emulador e depois o PC da rede local.
+    final best = reachable.firstWhere(
+      (c) => c == 'http://10.0.2.2:3000',
+      orElse: () => reachable.firstWhere(
+        (c) => c == 'http://192.168.1.175:3000',
+        orElse: () => reachable.first,
+      ),
+    );
+
+    // Achou o servidor local — busca a URL mais recente do tunnel
+    final tunnelUrl = await _fetchTunnelUrlFrom(best);
+    if (tunnelUrl != null && tunnelUrl.isNotEmpty) {
+      await setServerUrl(tunnelUrl);
+      return tunnelUrl;
+    }
+    await setServerUrl(best);
+    return best;
+  }
+
+  /// Consulta /api/config/server-url em um servidor acessível para
+  /// obter a URL atual do tunnel (ou null se não houver).
+  Future<String?> _fetchTunnelUrlFrom(String base) async {
+    try {
+      final response = await _client
+          .get(Uri.parse('$base/api/config/server-url'))
+          .timeout(const Duration(seconds: 3));
+      if (response.statusCode == 200) {
+        final body = jsonDecode(response.body) as Map<String, dynamic>;
+        return (body['url'] as String?)?.trim();
+      }
+    } catch (_) {
+      // Sem info de tunnel disponível
+    }
     return null;
   }
 
@@ -125,14 +186,8 @@ class AuthService {
   /// Try to reach a specific server URL directly.
   Future<bool> pingServer(String url) async {
     try {
-      var base = url.trim();
-      if (!base.startsWith('http://') && !base.startsWith('https://')) {
-        base = 'http://$base';
-      }
-      while (base.endsWith('/')) {
-        base = base.substring(0, base.length - 1);
-      }
-      final response = await http
+      final base = normalizeUrl(url);
+      final response = await _client
           .get(Uri.parse('$base/api/config/server-url'))
           .timeout(const Duration(seconds: 5));
       return response.statusCode == 200;
@@ -150,27 +205,28 @@ class AuthService {
 
   /// Faz login no servidor e guarda o token JWT.
   ///
-  /// Tenta na URL informada. Se falhar (tunnel morto, etc),
-  /// tenta automaticamente os endereços locais.
+  /// Tenta na URL informada. Se falhar por CONEXÃO (tunnel morto, servidor
+  /// offline), tenta automaticamente os endereços locais. Erros de
+  /// credenciais (401/400/429) são lançados imediatamente — sem fallback,
+  /// para o usuário ver a mensagem real em vez de
+  /// "Não foi possível conectar".
   Future<String> login(String url, String email, String password) async {
-    var base = _normalizeUrl(url);
+    final base = normalizeUrl(url);
 
-    // Tenta login na URL informada
     try {
       final result = await _tryLogin(base, email, password);
       if (result != null) return result;
+    } on AuthError {
+      rethrow; // credenciais/rate-limit — mostra a mensagem real
     } catch (_) {
-      // URL informada falhou, tenta endereços locais
+      // Falha de conexão na URL informada — tenta endereços locais
     }
 
-    // Se falhou, tenta endereços locais automaticamente
     final localCandidates = [
       'http://10.0.2.2:3000',      // Android emulator
       'http://localhost:3000',      // Same machine
       'http://127.0.0.1:3000',     // Same machine
       'http://192.168.1.175:3000',  // PC local network IP
-      'http://192.168.0.1:3000',   // Common gateway
-      'http://192.168.1.1:3000',   // Common gateway
     ];
 
     for (final candidate in localCandidates) {
@@ -178,47 +234,29 @@ class AuthService {
       try {
         final result = await _tryLogin(candidate, email, password);
         if (result != null) {
-          // Busca URL do tunnel via este servidor local
-          try {
-            final tunnelResp = await http
-                .get(Uri.parse('$candidate/api/config/server-url'))
-                .timeout(const Duration(seconds: 3));
-            if (tunnelResp.statusCode == 200) {
-              final tunnelBody = jsonDecode(tunnelResp.body) as Map<String, dynamic>;
-              final tunnelUrl = tunnelBody['url'] as String?;
-              if (tunnelUrl != null && tunnelUrl.isNotEmpty) {
-                await setServerUrl(tunnelUrl);
-                return tunnelUrl;
-              }
-            }
-          } catch (_) {}
+          // Achou o servidor local — salva a URL do tunnel se houver
+          final tunnelUrl = await _fetchTunnelUrlFrom(candidate);
+          if (tunnelUrl != null && tunnelUrl.isNotEmpty) {
+            await setServerUrl(tunnelUrl);
+            return tunnelUrl;
+          }
           await setServerUrl(candidate);
           return candidate;
         }
+      } on AuthError {
+        rethrow; // servidor local respondeu, mas credenciais inválidas
       } catch (_) {
         // Próximo candidato
       }
     }
 
-    throw Exception('Não foi possível conectar ao servidor. '
+    throw AuthError('Não foi possível conectar ao servidor. '
         'Verifique se o servidor está rodando e tente novamente.');
-  }
-
-  /// Normaliza URL (adiciona protocolo, remove barra final)
-  String _normalizeUrl(String url) {
-    var base = url.trim();
-    if (!base.startsWith('http://') && !base.startsWith('https://')) {
-      base = 'http://$base';
-    }
-    while (base.endsWith('/')) {
-      base = base.substring(0, base.length - 1);
-    }
-    return base;
   }
 
   /// Tenta fazer login em uma URL específica. Retorna null se falhar.
   Future<String?> _tryLogin(String base, String email, String password) async {
-    final response = await http
+    final response = await _client
         .post(
           Uri.parse('$base/api/auth/login'),
           headers: {
@@ -230,7 +268,7 @@ class AuthService {
 
     final body = jsonDecode(response.body) as Map<String, dynamic>;
     if (response.statusCode != 200 || body['token'] == null) {
-      throw Exception(body['error'] ?? 'Falha no login');
+      throw AuthError(body['error'] ?? 'Falha no login');
     }
 
     final prefs = await SharedPreferences.getInstance();

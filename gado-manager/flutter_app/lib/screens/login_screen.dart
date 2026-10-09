@@ -116,10 +116,12 @@ class _LoginScreenState extends State<LoginScreen> {
       }
     } catch (e) {
       // Mostra a mensagem de erro real para facilitar o diagnóstico
-      final msg = e.toString().replaceFirst('Exception: ', '');
-      setState(() => _error = msg.isNotEmpty
-          ? msg
-          : 'Não foi possível entrar. Verifique o servidor e as credenciais.');
+      var msg = e.toString();
+      msg = msg.replaceFirst('Exception: ', '');
+      if (msg.isEmpty) {
+        msg = 'Não foi possível entrar. Verifique o servidor e as credenciais.';
+      }
+      setState(() => _error = msg);
     } finally {
       if (mounted) setState(() => _loading = false);
     }

@@ -1,5 +1,6 @@
 import { db } from "@/lib/db";
 import { weightRecordSchema } from "@/lib/validations";
+import { ConflictError, ValidationError } from "@/lib/api-errors";
 import { z } from "zod";
 
 type WeightInput = z.infer<typeof weightRecordSchema>;
@@ -18,12 +19,12 @@ export async function createWeightRecord(data: WeightInput) {
   // Atomic: validate + create + update timestamp
   return db.$transaction(async (tx) => {
     const animal = await tx.animal.findUnique({ where: { id: validated.animalId } });
-    if (!animal) throw new Error("Animal não encontrado");
-    if (animal.status === "VENDIDO") throw new Error("Animal já foi vendido");
+    if (!animal) throw new ValidationError("Animal não encontrado");
+    if (animal.status === "VENDIDO") throw new ConflictError("Animal já foi vendido");
 
     const cycle = await tx.animalCycle.findUnique({ where: { id: validated.cicloId } });
-    if (!cycle) throw new Error("Ciclo não encontrado");
-    if (cycle.status !== "ATIVO") throw new Error("Este ciclo já está encerrado");
+    if (!cycle || cycle.animalId !== validated.animalId) throw new ValidationError("Ciclo não encontrado para este animal");
+    if (cycle.status !== "ATIVO") throw new ConflictError("Este ciclo já está encerrado");
 
     const [record] = await Promise.all([
       tx.weightRecord.create({

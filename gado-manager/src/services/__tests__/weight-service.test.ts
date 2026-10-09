@@ -36,7 +36,7 @@ describe("weight-service", () => {
 
     it("deve criar registro de peso válido", async () => {
       const mockAnimal = { id: "1", status: "ATIVO" };
-      const mockCycle = { id: "1", status: "ATIVO" };
+      const mockCycle = { id: "1", status: "ATIVO", animalId: validWeightData.animalId };
       const mockRecord = { id: "1", pesoKg: 451.5 };
 
       vi.mocked(db.animal.findUnique).mockResolvedValue(mockAnimal as never);
@@ -70,7 +70,7 @@ describe("weight-service", () => {
 
     it("deve recriar ciclo inativo", async () => {
       const mockAnimal = { id: "1", status: "ATIVO" };
-      const mockCycle = { id: "1", status: "ENCERRADO" };
+      const mockCycle = { id: "1", status: "ENCERRADO", animalId: validWeightData.animalId };
 
       vi.mocked(db.animal.findUnique).mockResolvedValue(mockAnimal as never);
       vi.mocked(db.animalCycle.findUnique).mockResolvedValue(mockCycle as never);
@@ -82,7 +82,7 @@ describe("weight-service", () => {
 
     it("deve retornar registro existente por idempotência", async () => {
       const mockAnimal = { id: "1", status: "ATIVO" };
-      const mockCycle = { id: "1", status: "ATIVO" };
+      const mockCycle = { id: "1", status: "ATIVO", animalId: validWeightData.animalId };
       const existingRecord = { id: "existing", pesoKg: 451.5 };
 
       vi.mocked(db.animal.findUnique).mockResolvedValue(mockAnimal as never);

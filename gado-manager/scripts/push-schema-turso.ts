@@ -193,8 +193,8 @@ async function main() {
       const indexMatch = sql.match(/CREATE.*INDEX IF NOT EXISTS "(\w+)"/);
       if (tableMatch) console.log(`  ✅ Table: ${tableMatch[1]}`);
       else if (indexMatch) console.log(`  📑 Index: ${indexMatch[1]}`);
-    } catch (err: any) {
-      console.error(`  ❌ Failed: ${err.message}`);
+    } catch (err) {
+      console.error(`  ❌ Failed: ${err instanceof Error ? err.message : String(err)}`);
       console.error(`     SQL: ${sql.substring(0, 80)}...`);
     }
   }

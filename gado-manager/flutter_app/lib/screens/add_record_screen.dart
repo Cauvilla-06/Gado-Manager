@@ -167,7 +167,7 @@ class _AddRecordScreenState extends State<AddRecordScreen> {
           children: [
             // Seletor de animal
             DropdownButtonFormField<Animal>(
-              value: _selectedAnimal,
+              initialValue: _selectedAnimal,
               decoration: const InputDecoration(
                 labelText: 'Animal',
                 border: OutlineInputBorder(),

@@ -1,5 +1,6 @@
 import { db } from "@/lib/db";
 import { animalSchema } from "@/lib/validations";
+import { ConflictError } from "@/lib/api-errors";
 import { z } from "zod";
 
 const includeWithRelations = {
@@ -127,7 +128,7 @@ export async function createAnimal(
     });
 
     if (existing) {
-      throw new Error(
+      throw new ConflictError(
         `Já existe um animal ativo com o número ${validated.numeroIdentificacao}`
       );
     }
@@ -157,6 +158,120 @@ export async function createAnimal(
 
     return { animal: updated, cycle };
   });
+}
+
+/**
+ * Exclui um animal (com todos os ciclos/registros, via cascade).
+ * Valida que o animal pertence à fazenda antes de excluir.
+ */
+export async function deleteAnimal(id: string, farmId: string) {
+  const animal = await db.animal.findFirst({
+    where: { id, farmId },
+    select: { id: true },
+  });
+  if (!animal) {
+    throw new ConflictError("Animal não encontrado nesta fazenda");
+  }
+  await db.animal.delete({ where: { id } });
+}
+
+/**
+ * Cria vários animais de uma vez (usado pelo bot de cadastro).
+ * Cada animal é criado em transação própria: duplicados são pulados (não
+ * abortam o lote) e o resultado reporta criados/duplicados individualmente.
+ */
+export async function createAnimalsBatch(
+  numeros: string[],
+  farmId: string
+): Promise<{
+  criados: Array<{ numeroIdentificacao: string; id: string }>;
+  duplicados: string[];
+  erros: Array<{ numeroIdentificacao: string; erro: string }>;
+}> {
+  const criados: Array<{ numeroIdentificacao: string; id: string }> = [];
+  const duplicados: string[] = [];
+  const erros: Array<{ numeroIdentificacao: string; erro: string }> = [];
+
+  for (const numero of numeros) {
+    try {
+      const validated = animalSchema.parse({ numeroIdentificacao: numero });
+      const result = await db.$transaction(async (tx) => {
+        const existing = await tx.animal.findFirst({
+          where: {
+            numeroIdentificacao: validated.numeroIdentificacao,
+            farmId,
+            status: "ATIVO",
+          },
+        });
+        if (existing) return null;
+
+        const animal = await tx.animal.create({
+          data: {
+            numeroIdentificacao: validated.numeroIdentificacao,
+            status: "ATIVO",
+            farmId,
+          },
+        });
+
+        const cycle = await tx.animalCycle.create({
+          data: {
+            animalId: animal.id,
+            numeroCiclo: 1,
+            status: "ATIVO",
+          },
+        });
+
+        return tx.animal.update({
+          where: { id: animal.id },
+          data: { cicloAtualId: cycle.id },
+        });
+      });
+
+      if (result === null) {
+        duplicados.push(validated.numeroIdentificacao);
+      } else {
+        criados.push({
+          numeroIdentificacao: validated.numeroIdentificacao,
+          id: result.id,
+        });
+      }
+    } catch (err) {
+      erros.push({
+        numeroIdentificacao: numero,
+        erro: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  return { criados, duplicados, erros };
+}
+
+/**
+ * Exclui vários animais de uma vez (usado pelo bot de exclusão).
+ * Valida ownership por fazenda e retorna o que foi excluído/não encontrado.
+ */
+export async function deleteAnimalsBatch(
+  animalIds: string[],
+  farmId: string
+): Promise<{
+  excluidos: string[];
+  naoEncontrados: string[];
+}> {
+  // Garante que só deletamos animais da fazenda informada (IDOR-safe).
+  const animais = await db.animal.findMany({
+    where: { id: { in: animalIds }, farmId },
+    select: { id: true },
+  });
+  const validIds = new Set(animais.map((a) => a.id));
+  const naoEncontrados = animalIds.filter((id) => !validIds.has(id));
+
+  if (validIds.size > 0) {
+    await db.animal.deleteMany({
+      where: { id: { in: [...validIds] }, farmId },
+    });
+  }
+
+  return { excluidos: [...validIds], naoEncontrados };
 }
 
 export async function searchAnimals(

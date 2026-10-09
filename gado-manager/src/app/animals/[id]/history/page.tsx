@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useState, use } from "react";
+import { use } from "react";
+import { useCachedData } from "@/lib/use-cached-data";
 import Link from "next/link";
 import {
   ArrowLeft,
@@ -9,6 +10,7 @@ import {
   ShoppingCart,
   RefreshCw,
   Calendar,
+  AlertTriangle,
 } from "lucide-react";
 
 interface TimelineEvent {
@@ -56,23 +58,20 @@ export default function HistoryPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = use(params);
-  const [animal, setAnimal] = useState<AnimalData | null>(null);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    async function load() {
-      try {
-        const res = await fetch(`/api/animals/${id}`);
-        if (!res.ok) throw new Error("Not found");
-        setAnimal(await res.json());
-      } catch (err) {
-        console.error(err);
-      } finally {
-        setLoading(false);
-      }
-    }
-    load();
-  }, [id]);
+  // Mesma chave de cache da ficha do animal: reusa os dados já carregados.
+  const {
+    data: animal,
+    loading,
+    error,
+  } = useCachedData<AnimalData>(
+    `animal:${id}`,
+    async () => {
+      const res = await fetch(`/api/animals/${id}`);
+      if (!res.ok) throw new Error("Not found");
+      return res.json();
+    },
+    15_000
+  );
 
   if (loading) {
     return (
@@ -80,6 +79,18 @@ export default function HistoryPage({
         {[1, 2, 3].map((i) => (
           <div key={i} className="h-20 bg-muted rounded-xl animate-pulse" />
         ))}
+      </div>
+    );
+  }
+
+  if (!animal && error) {
+    return (
+      <div className="flex flex-col items-center justify-center rounded-xl border border-dashed py-16 text-center">
+        <AlertTriangle className="h-12 w-12 text-red-400 mb-4" />
+        <h2 className="font-medium text-lg">Erro ao carregar o histórico</h2>
+        <p className="text-sm text-muted-foreground mt-1 mb-4 max-w-md">
+          {error.message} — verifique se o servidor está rodando.
+        </p>
       </div>
     );
   }

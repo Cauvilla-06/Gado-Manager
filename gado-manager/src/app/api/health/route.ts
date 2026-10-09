@@ -2,52 +2,18 @@ import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
 
 /**
- * Health check endpoint para monitoramento.
- * Verifica conectividade com o banco de dados.
+ * Health check endpoint mínimo para monitoramento.
  *
- * GET /api/health
- *
- * Response 200:
- * {
- *   "status": "healthy",
- *   "timestamp": "2026-08-23T10:00:00.000Z",
- *   "database": "connected",
- *   "uptime": 12345.678
- * }
- *
- * Response 503:
- * {
- *   "status": "unhealthy",
- *   "timestamp": "...",
- *   "database": "disconnected",
- *   "error": "..."
- * }
+ * Segurança (audit 4.2): não expõe uptime, responseTime, nem status do banco.
+ * Um atacante não precisa saber se o banco está conectado nem há quanto tempo
+ * o servidor está de pé. Apenas 200 (vivo) ou 503 (problema).
  */
 export async function GET() {
-  const startTime = Date.now();
-
   try {
-    // Testar conexão com o banco
+    // Testar conexão com o banco sem expor detalhes
     await db.$queryRaw`SELECT 1`;
-
-    const responseTime = Date.now() - startTime;
-
-    return NextResponse.json({
-      status: "healthy",
-      timestamp: new Date().toISOString(),
-      database: "connected",
-      responseTime: `${responseTime}ms`,
-      uptime: process.uptime(),
-    });
-  } catch (error) {
-    return NextResponse.json(
-      {
-        status: "unhealthy",
-        timestamp: new Date().toISOString(),
-        database: "disconnected",
-        error: error instanceof Error ? error.message : "Erro desconhecido",
-      },
-      { status: 503 }
-    );
+    return NextResponse.json({ status: "healthy" });
+  } catch {
+    return NextResponse.json({ status: "unhealthy" }, { status: 503 });
   }
 }

@@ -3,10 +3,12 @@ import { db } from "@/lib/db";
 import bcrypt from "bcryptjs";
 import { signJWT } from "@/lib/jwt";
 import { rateLimitResponse, RATE_LIMITS } from "@/lib/ratelimit";
+import { getClientIp } from "@/lib/client-ip";
 
 export async function POST(request: NextRequest) {
-  // Rate limiting: 5 tentativas por minuto por IP
-  const ip = request.headers.get("x-forwarded-for") ?? "127.0.0.1";
+  // Rate limiting: 5 tentativas por minuto por IP real (anti-spoof)
+  // + limite por conta (email) para atacar uma conta de vários IPs
+  const ip = getClientIp(request.headers);
   const rateLimit = rateLimitResponse(`login:${ip}`, RATE_LIMITS.login);
   if (rateLimit.limited) {
     return rateLimit.response;
@@ -20,6 +22,15 @@ export async function POST(request: NextRequest) {
         { error: "Email e senha são obrigatórios" },
         { status: 400 }
       );
+    }
+
+    // Limita tentativas por CONTA também (brute force distribuído por IPs)
+    const mailLimit = rateLimitResponse(
+      `login-email:${email.trim().toLowerCase()}`,
+      RATE_LIMITS.login
+    );
+    if (mailLimit.limited) {
+      return mailLimit.response;
     }
 
     const user = await db.user.findUnique({ where: { email } });

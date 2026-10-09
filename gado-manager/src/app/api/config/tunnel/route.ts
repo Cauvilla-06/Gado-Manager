@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { readFile, writeFile, mkdir } from "fs/promises";
 import { existsSync } from "fs";
 import { join } from "path";
+import { isTunnelRequest } from "@/lib/client-ip";
 
 const CONFIG_DIR = join(process.cwd(), ".runtime-config");
 const CONFIG_FILE = join(CONFIG_DIR, "server-url.json");
@@ -15,6 +16,8 @@ async function ensureDir() {
 /**
  * GET /api/config/tunnel
  * Returns the current tunnel URL and when it was last updated.
+ * Público (sem auth): o app Flutter usa isso para auto-preencher o servidor.
+ * Não vaza segredo — apenas o endereço público do túnel.
  */
 export async function GET() {
   try {
@@ -32,13 +35,27 @@ export async function GET() {
   }
 }
 
+function isLocalRequest(request: NextRequest): boolean {
+  // Bloqueia qualquer requisicao que veio pelo tunel/proxy (headers cf-* nao
+  // forjaveis definidos pelo edge do Cloudflare). O cloudflared repassa tudo
+  // como 127.0.0.1, entao IP nunca basta para dizer que e local.
+  return !isTunnelRequest(request);
+}
+
 /**
- * POST /api/config/tunnel
- * Saves a new tunnel URL. Called by start-server.bat or manually.
- * Body: { url: "https://xxxx.trycloudflare.com" }
+ * POST /api/config/tunnel — PROTEGIDO (audit 1.6).
+ * Só aceita alteração vinda da própria máquina/rede local.
+ * Um atacante pela internet (via túnel) recebe 403.
  */
 export async function POST(request: NextRequest) {
   try {
+    if (!isLocalRequest(request)) {
+      return NextResponse.json(
+        { error: "Alteração de configuração permitida apenas localmente" },
+        { status: 403 }
+      );
+    }
+
     const body = await request.json();
     const { url } = body;
 
@@ -57,6 +74,14 @@ export async function POST(request: NextRequest) {
     } catch {
       return NextResponse.json(
         { error: "URL invalida" },
+        { status: 400 }
+      );
+    }
+
+    // Só aceita HTTPS em host que não seja o próprio servidor
+    if (!url.trim().startsWith("https://")) {
+      return NextResponse.json(
+        { error: "A URL do túnel deve usar https://" },
         { status: 400 }
       );
     }

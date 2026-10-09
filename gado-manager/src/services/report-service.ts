@@ -81,9 +81,11 @@ export async function getGeneralReport(farmId: string, filters?: {
   }
 
   // If periodDays is specified, filter by animals updated within that period
+  // Clamp explosivo (audit 2.2): sem limite, datas estouram e quebram a query
   if (filters?.periodDays && filters.periodDays > 0) {
+    const periodDays = Math.min(Math.floor(filters.periodDays), 3650); // máx 10 anos
     const cutoff = new Date();
-    cutoff.setDate(cutoff.getDate() - filters.periodDays);
+    cutoff.setDate(cutoff.getDate() - periodDays);
     where.atualizadoEm = { gte: cutoff };
   }
 
