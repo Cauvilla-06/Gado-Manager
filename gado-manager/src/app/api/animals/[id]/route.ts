@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getAnimalById, deleteAnimal } from "@/services/animal-service";
 import { requireFarm } from "@/lib/farm";
 import { apiHandler, NotFoundError, ForbiddenError } from "@/lib/api-errors";
-import { animalBelongsToFarm, userCanWriteToFarm } from "@/lib/ownership";
+import { animalBelongsToFarm, canManageHerd } from "@/lib/ownership";
 
 interface RouteContext {
   params: Promise<{ id: string }>;
@@ -23,7 +23,7 @@ export const GET = apiHandler<RouteContext>(async (request: NextRequest, context
 
 export const DELETE = apiHandler<RouteContext>(async (request: NextRequest, context) => {
   const { id } = await context.params;
-  const { user, farm } = await requireFarm();
+  const { farm, membership } = await requireFarm();
 
   // Ownership validation
   const belongs = await animalBelongsToFarm(id, farm.id);
@@ -32,7 +32,7 @@ export const DELETE = apiHandler<RouteContext>(async (request: NextRequest, cont
   }
 
   // Role validation: MEMBER é somente leitura
-  const canWrite = await userCanWriteToFarm(user.id, farm.id);
+  const canWrite = canManageHerd(membership.role);
   if (!canWrite) {
     throw new ForbiddenError("Seu nível de acesso não permite excluir animais");
   }

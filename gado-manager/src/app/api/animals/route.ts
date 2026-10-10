@@ -9,7 +9,7 @@ import {
 import { requireFarm } from "@/lib/farm";
 import { animalStatusFilterSchema } from "@/lib/validations";
 import { apiHandler, ForbiddenError } from "@/lib/api-errors";
-import { userCanWriteToFarm } from "@/lib/ownership";
+import { canManageHerd } from "@/lib/ownership";
 
 const batchDeleteSchema = z.object({
   ids: z.array(z.string().min(1)).min(1).max(1000),
@@ -33,10 +33,10 @@ export const GET = apiHandler(async (request: NextRequest) => {
 });
 
 export const POST = apiHandler(async (request: NextRequest) => {
-  const { user, farm } = await requireFarm();
+  const { farm, membership } = await requireFarm();
 
   // Role validation: MEMBER é somente leitura
-  const canWrite = await userCanWriteToFarm(user.id, farm.id);
+  const canWrite = canManageHerd(membership.role);
   if (!canWrite) {
     throw new ForbiddenError("Seu nível de acesso não permite cadastrar animais");
   }
@@ -52,9 +52,9 @@ export const POST = apiHandler(async (request: NextRequest) => {
  * Body: { ids: ["uuid1", "uuid2", ...] }
  */
 export const DELETE = apiHandler(async (request: NextRequest) => {
-  const { user, farm } = await requireFarm();
+  const { farm, membership } = await requireFarm();
 
-  const canWrite = await userCanWriteToFarm(user.id, farm.id);
+  const canWrite = canManageHerd(membership.role);
   if (!canWrite) {
     throw new ForbiddenError("Seu nível de acesso não permite excluir animais");
   }

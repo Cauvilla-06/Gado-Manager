@@ -1,6 +1,7 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
+import React, { useState } from "react";
+import { useCachedData } from "@/lib/use-cached-data";
 import Link from "next/link";
 import { BarChart3, TrendingUp, Beef, FileText, Download, Table, ChevronDown, ChevronRight, Syringe } from "lucide-react";
 
@@ -21,9 +22,19 @@ import {
 const PIE_COLORS = ["#16a34a", "#2563eb", "#f59e0b", "#ef4444", "#8b5cf6", "#06b6d4"];
 
 export default function ReportsPage() {
-  const [report, setReport] = useState<GeneralReport | null>(null);
-  const [loading, setLoading] = useState(true);
   const [statusFilter, setStatusFilter] = useState("all");
+  // Cache por filtro: voltar aos relatórios é instantâneo (revalida por trás)
+  const { data: reportData, loading } = useCachedData<GeneralReport | null>(
+    `reports:general:${statusFilter}`,
+    async () => {
+      const params = new URLSearchParams();
+      if (statusFilter !== "all") params.set("status", statusFilter);
+      const res = await fetch(`/api/reports/general?${params}`);
+      if (!res.ok) return null;
+      return res.json();
+    }
+  );
+  const report = reportData ?? null;
   const [sectionFilters, setSectionFilters] = useState({
     cards: true,
     statusChart: true,
@@ -60,25 +71,6 @@ export default function ReportsPage() {
     setSectionFilters((prev) => ({ ...prev, [key]: !prev[key] }));
   }
 
-  useEffect(() => {
-    async function load() {
-      try {
-        const params = new URLSearchParams();
-        if (statusFilter !== "all") params.set("status", statusFilter);
-        const res = await fetch(`/api/reports/general?${params}`);
-        if (!res.ok) {
-          setReport(null);
-        } else {
-          setReport(await res.json());
-        }
-      } catch (err) {
-        console.error(err);
-      } finally {
-        setLoading(false);
-      }
-    }
-    load();
-  }, [statusFilter]);
 
   const animais = report?.animais ?? [];
 
@@ -184,10 +176,7 @@ export default function ReportsPage() {
         ].map((f) => (
           <button
             key={f.value}
-            onClick={() => {
-              setLoading(true);
-              setStatusFilter(f.value);
-            }}
+            onClick={() => setStatusFilter(f.value)}
             className={`rounded-lg px-3 py-1.5 text-xs font-medium transition-colors ${
               statusFilter === f.value
                 ? "bg-primary text-primary-foreground"

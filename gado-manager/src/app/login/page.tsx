@@ -4,6 +4,8 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { Beef, AlertTriangle } from "lucide-react";
+import { clearDataCache } from "@/lib/use-cached-data";
+import { clearStoredSession } from "@/lib/use-session";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -31,9 +33,11 @@ export default function LoginPage() {
         return;
       }
 
-      // Success — wait a tick for the cookie to be stored, then navigate away.
-      // Dropped router.refresh() to avoid a dashboard reload loop right after login.
-      await new Promise((r) => setTimeout(r, 100));
+      // Sucesso: o cookie já foi gravado quando a resposta chegou.
+      // Limpa qualquer dado de sessão anterior (outro usuário/fazenda) e entra.
+      // (Sem router.refresh(): causava loop de recarga no dashboard.)
+      clearStoredSession();
+      clearDataCache();
       router.replace("/");
     } catch {
       setError("Erro ao fazer login");

@@ -204,6 +204,10 @@ Vaccination
 | `POST` | `/api/sync` | Sincronização offline (até 500 registros por tipo) |
 | `POST` | `/api/auth/logout` | Sair; com `{"todosDispositivos": true}` invalida todos os tokens |
 | `GET` | `/api/config/server-url` | URL atual do túnel (somente leitura) |
+| `DELETE` | `/api/animals/:id` | Excluir boi (com todo o histórico) |
+| `GET` | `/api/farms/members` | Membros da fazenda ativa |
+| `DELETE` | `/api/farms/members/:userId` | Remover membro da fazenda ativa |
+| `GET` | `/api/auth/me` | Sessão do site numa chamada: usuário, fazendas, nível, pedidos pendentes |
 
 ### Permissões por nível
 
@@ -213,6 +217,12 @@ Vaccination
 | Lançar pesagem, vacina, vermífugo, vitamina (site e app) | ✅ | ✅ | ✅ |
 | Cadastrar, excluir ou vender boi; iniciar ciclo | ✅ | ✅ | ❌ |
 | Aprovar pedidos de entrada | ✅ | ✅ | ❌ |
+| Remover MEMBER | ✅ | ✅ | ❌ |
+| Remover ADMIN | ✅ | ❌ | ❌ |
+
+Ninguém remove o OWNER, e ninguém remove a si mesmo. A pessoa removida perde o
+acesso na hora (site e app); os registros que ela lançou continuam.
+As regras ficam em `src/lib/permissions.ts` (usadas pelas rotas e pelas telas).
 
 Todo registro guarda quem lançou (`criadoPorId`), inclusive os que chegam pelo app.
 

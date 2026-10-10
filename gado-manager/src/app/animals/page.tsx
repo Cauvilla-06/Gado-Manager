@@ -2,8 +2,10 @@
 
 import { useState } from "react";
 import Link from "next/link";
+import { useSession } from "@/lib/use-session";
+import { canManageHerd } from "@/lib/permissions";
 import { Plus, Search, TrendingUp, TrendingDown, Beef, RefreshCw, AlertTriangle } from "lucide-react";
-import { useCachedData, clearDataCache } from "@/lib/use-cached-data";
+import { useCachedData, invalidateDataCache } from "@/lib/use-cached-data";
 
 interface AnimalItem {
   id: string;
@@ -17,6 +19,9 @@ interface AnimalItem {
 }
 
 export default function AnimalsPage() {
+  // MEMBER não cadastra boi: esconde o botão (o servidor também bloqueia)
+  const { data: session } = useSession();
+  const canManage = !!session?.role && canManageHerd(session.role);
   // Cache: voltar para a lista de animais é instantâneo.
   const { data: animals, loading, refreshing, refresh, error } = useCachedData<AnimalItem[]>(
     "animals:summary",
@@ -96,10 +101,7 @@ export default function AnimalsPage() {
         </div>
         <div className="flex items-center gap-2">
           <button
-            onClick={() => {
-              clearDataCache("animals");
-              refresh();
-            }}
+            onClick={() => refresh()}
             className={`rounded-lg p-2 text-muted-foreground hover:bg-accent transition-colors ${
               refreshing ? "animate-spin" : ""
             }`}
@@ -107,14 +109,16 @@ export default function AnimalsPage() {
           >
             <RefreshCw className="h-4 w-4" />
           </button>
-          <Link
-            href="/animals/new"
-            className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2.5 text-sm font-medium text-primary-foreground shadow-sm hover:bg-primary/90 transition-colors"
-            onClick={() => clearDataCache("animals")}
-          >
-            <Plus className="h-4 w-4" />
-            Novo Animal
-          </Link>
+          {canManage && (
+            <Link
+              href="/animals/new"
+              className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2.5 text-sm font-medium text-primary-foreground shadow-sm hover:bg-primary/90 transition-colors"
+              onClick={() => invalidateDataCache("animals")}
+            >
+              <Plus className="h-4 w-4" />
+              Novo Animal
+            </Link>
+          )}
         </div>
       </div>
 

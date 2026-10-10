@@ -149,3 +149,51 @@ problema: os scripts `start-*.bat` recriam na próxima vez que o túnel subir.
 
 Dúvidas: veja a seção 7 do `SECURITY-AUDIT.md` ou o `README.md` (passo a passo de
 instalação e tabela de permissões).
+
+---
+
+# 🆕 Atualização: excluir boi, remover membros e velocidade das páginas
+
+Branch `feat/gestao-fazenda-e-desempenho`, que continua a de segurança. **Não precisa
+mudar nada no banco**: é só puxar e rodar.
+
+## Excluir boi
+- Botão **"Excluir Boi"** na ficha do animal, para **OWNER e ADMIN**.
+- Pede confirmação e mostra quanto histórico vai junto (ciclos, pesagens, vacinas...).
+- Se o boi foi vendido, a tela sugere usar **"Marcar como Vendido"**, que mantém o
+  histórico.
+
+## Remover membros
+- Botão **"Remover"** na página de membros:
+  - o **OWNER** remove ADMIN e MEMBER;
+  - o **ADMIN** remove só MEMBER;
+  - ninguém remove o dono, e ninguém remove a si mesmo.
+- A pessoa perde o acesso **na hora**, no site e no app. Os registros que ela lançou
+  continuam, com o nome dela.
+- Não existe tela para promover alguém a ADMIN (já era assim antes). Se quiser, dá
+  para fazer depois.
+
+## Botões escondidos para quem não pode usar
+Para o MEMBER, somem "Novo Animal", "Marcar como Vendido", "Novo Ciclo" e "Excluir
+Boi". O servidor já bloqueava essas ações; agora a tela também não oferece.
+
+## Por que estava lento e o que mudou (medido no navegador, modo dev, 200 bois)
+
+| Problema encontrado | Correção | Resultado |
+|---|---|---|
+| O menu do topo disparava de **11 a 14 chamadas** à API em cada página (a mesma chamada repetida em cascata) | Uma chamada só (`/api/auth/me`), compartilhada entre menu e páginas | **2 chamadas** por página |
+| No modo dev, a **primeira visita** a cada página espera o Next montá-la (até 7 s). O clique parecia "não funcionar" | Logo após o login, o site pede para o servidor montar as páginas em segundo plano (**só no `npm run dev`**, em produção não roda) | Ficha do boi: 5,0 s → **1,1 s**. Relatório do boi: 6,9 s → **2,2 s** |
+| Relatório do boi carregava as bibliotecas de PDF e Excel ao abrir | Agora carregam só ao clicar em exportar | Página mais leve |
+| Relatórios, membros e pedidos buscavam tudo de novo a cada visita | Cache (mostra na hora e atualiza por trás) | Voltar a membros/pedidos: ~0,1 s |
+| Dashboard desenhava **todos** os bois de uma vez | Mostra 30 e botão "Mostrar mais" (a busca procura em todos) | Voltar ao dashboard: 0,7 s → **0,2 s** |
+| Depois de lançar uma pesagem, a tela **piscava** o carregamento | Os dados antigos continuam na tela enquanto atualiza | Sem piscar |
+| Cartões "Pesagens" e "Vacinas" do dashboard mostravam **sempre 0** | A API agora calcula os totais | Números reais |
+| Rotas do servidor consultavam o banco em sequência e repetiam consultas | Consultas em paralelo e sem repetição | Menos idas ao Turso por clique |
+
+> No Turso (banco na nuvem) o ganho tende a ser **maior** do que nas medições acima,
+> que foram feitas com banco local: cada chamada e cada consulta a menos economiza
+> uma ida pela internet.
+
+**Aviso:** o Next 16 cria sozinho um arquivo `AGENTS.md` na pasta do projeto quando
+roda `npm run dev`. Ele não faz parte do app. Se não quiser que ele apareça, coloque
+`agentRules: false` no `next.config.ts`, ou só não faça commit dele.

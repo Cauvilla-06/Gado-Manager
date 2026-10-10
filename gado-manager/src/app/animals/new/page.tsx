@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { ArrowLeft, Save, CheckCircle } from "lucide-react";
 import Link from "next/link";
+import { invalidateDataCache } from "@/lib/use-cached-data";
 
 export default function NewAnimalPage() {
   const router = useRouter();
@@ -31,6 +32,11 @@ export default function NewAnimalPage() {
       }
 
       setSuccess(true);
+      // Listas, dashboard, relatórios e contagem do menu ficam desatualizados
+      invalidateDataCache("animals:");
+      invalidateDataCache("dashboard:");
+      invalidateDataCache("reports:");
+      invalidateDataCache("session");
       setTimeout(() => {
         router.push(`/animals/${data.animal.id}`);
       }, 1200);

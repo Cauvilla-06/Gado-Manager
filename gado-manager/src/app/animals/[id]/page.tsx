@@ -2,6 +2,7 @@
 
 import { useState, use } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import {
   ArrowLeft,
   TrendingUp,
@@ -16,6 +17,7 @@ import {
   CheckCircle,
   Bug,
   Pill,
+  Trash2,
 } from "lucide-react";
 import {
   LineChart,
@@ -26,7 +28,9 @@ import {
   Tooltip,
   ResponsiveContainer,
 } from "@/components/shared/DynamicRecharts";
-import { useCachedData, clearDataCache } from "@/lib/use-cached-data";
+import { useCachedData, invalidateDataCache } from "@/lib/use-cached-data";
+import { useSession } from "@/lib/use-session";
+import { canManageHerd } from "@/lib/permissions";
 
 interface UserData {
   id: string;
@@ -117,12 +121,19 @@ export default function AnimalDetailPage({
 
   function invalidateAnimalCaches() {
     // Dados do animal e listas agregadas mudaram: força revalidação nas outras páginas.
-    clearDataCache("animal:");
-    clearDataCache("animals:");
-    clearDataCache("dashboard:");
+    invalidateDataCache("animal:");
+    invalidateDataCache("animals:");
+    invalidateDataCache("dashboard:");
+    invalidateDataCache("reports:");
   }
 
+  const router = useRouter();
+  // Nível na fazenda: decide quais botões mostrar (o servidor confere de novo)
+  const { data: session } = useSession();
+  const canManage = !!session?.role && canManageHerd(session.role);
+
   const [showSellDialog, setShowSellDialog] = useState(false);
+  const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const [showNewCycleDialog, setShowNewCycleDialog] = useState(false);
   const [showWeightForm, setShowWeightForm] = useState(false);
   const [showVaccineForm, setShowVaccineForm] = useState(false);
@@ -220,6 +231,32 @@ export default function AnimalDetailPage({
         type: "error",
       });
     } finally {
+      setActionLoading(false);
+    }
+  }
+
+  async function handleDelete() {
+    setActionLoading(true);
+    try {
+      const res = await fetch(`/api/animals/${id}`, { method: "DELETE" });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || "Erro ao excluir");
+      }
+      // Some das listas, do dashboard, dos relatórios e da contagem do menu.
+      // (A própria chave "animal:<id>" não é tocada: recarregar um boi que
+      // acabou de ser apagado mostraria um erro antes de sair da página.)
+      invalidateDataCache("animals:");
+      invalidateDataCache("dashboard:");
+      invalidateDataCache("reports:");
+      invalidateDataCache("session");
+      router.replace("/animals");
+    } catch (err) {
+      setMessage({
+        text: err instanceof Error ? err.message : "Erro ao excluir",
+        type: "error",
+      });
+      setShowDeleteDialog(false);
       setActionLoading(false);
     }
   }
@@ -1350,7 +1387,7 @@ export default function AnimalDetailPage({
           Histórico
         </Link>
 
-        {animal.status === "ATIVO" && (
+        {canManage && animal.status === "ATIVO" && (
           <button
             onClick={() => setShowSellDialog(true)}
             className="inline-flex items-center gap-2 rounded-lg bg-destructive px-4 py-2.5 text-sm font-medium text-destructive-foreground hover:bg-destructive/90 transition-colors"
@@ -1360,13 +1397,23 @@ export default function AnimalDetailPage({
           </button>
         )}
 
-        {animal.status === "VENDIDO" && (
+        {canManage && animal.status === "VENDIDO" && (
           <button
             onClick={() => setShowNewCycleDialog(true)}
             className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2.5 text-sm font-medium text-primary-foreground hover:bg-primary/90 transition-colors"
           >
             <RefreshCw className="h-4 w-4" />
             Novo Ciclo
+          </button>
+        )}
+
+        {canManage && (
+          <button
+            onClick={() => setShowDeleteDialog(true)}
+            className="inline-flex items-center gap-2 rounded-lg border border-red-200 px-4 py-2.5 text-sm font-medium text-red-600 hover:bg-red-50 transition-colors"
+          >
+            <Trash2 className="h-4 w-4" />
+            Excluir Boi
           </button>
         )}
       </div>
@@ -1410,6 +1457,55 @@ export default function AnimalDetailPage({
                 </div>
               </div>
             ))}
+          </div>
+        </div>
+      )}
+
+      {/* Delete Confirmation Dialog */}
+      {showDeleteDialog && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+          onClick={(e) => { if (e.target === e.currentTarget && !actionLoading) setShowDeleteDialog(false); }}
+        >
+          <div className="mx-4 w-full max-w-md rounded-xl bg-card p-6 shadow-xl animate-fade-in">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="flex h-10 w-10 items-center justify-center rounded-full bg-red-100">
+                <Trash2 className="h-5 w-5 text-red-600" />
+              </div>
+              <div>
+                <h3 className="font-semibold text-lg">Excluir Boi #{animal.numeroIdentificacao}</h3>
+                <p className="text-sm text-muted-foreground">
+                  Esta ação não pode ser desfeita.
+                </p>
+              </div>
+            </div>
+            <p className="text-sm mb-6">
+              O boi será apagado da fazenda junto com <strong>todo o histórico</strong>:{" "}
+              {animal.ciclos.length} ciclo(s),{" "}
+              {animal.ciclos.reduce((n, c) => n + c.pesagens.length, 0)} pesagem(ns),{" "}
+              {animal.ciclos.reduce((n, c) => n + c.vacinas.length, 0)} vacina(s),{" "}
+              {animal.ciclos.reduce((n, c) => n + (c.vermifugos?.length || 0), 0)} vermífugo(s) e{" "}
+              {animal.ciclos.reduce((n, c) => n + (c.vitaminas?.length || 0), 0)} vitamina(s).
+              {animal.status === "ATIVO" && (
+                <> Se o boi foi vendido, prefira <strong>Marcar como Vendido</strong> para manter o histórico.</>
+              )}
+            </p>
+            <div className="flex gap-3 justify-end">
+              <button
+                onClick={() => setShowDeleteDialog(false)}
+                disabled={actionLoading}
+                className="rounded-lg border px-4 py-2 text-sm font-medium hover:bg-accent disabled:opacity-50"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={handleDelete}
+                disabled={actionLoading}
+                className="rounded-lg bg-destructive px-4 py-2 text-sm font-medium text-destructive-foreground hover:bg-destructive/90 disabled:opacity-50"
+              >
+                {actionLoading ? "Excluindo..." : "Excluir definitivamente"}
+              </button>
+            </div>
           </div>
         </div>
       )}

@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState } from "react";
+import { useSession } from "@/lib/use-session";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { ArrowLeft, CheckCircle, AlertTriangle, Copy } from "lucide-react";
@@ -19,17 +20,10 @@ export default function JoinFarmPage() {
   const [loading, setLoading] = useState(false);
   const [success, setSuccess] = useState(false);
   const [error, setError] = useState("");
-  const [myFarms, setMyFarms] = useState<FarmInfo[]>([]);
+  // Mesma sessão do menu (já em cache): sem chamada extra a /api/farms
+  const { data: session } = useSession();
+  const myFarms: FarmInfo[] = session?.farms ?? [];
   const [copied, setCopied] = useState<string | null>(null);
-
-  useEffect(() => {
-    fetch("/api/farms")
-      .then((res) => res.json())
-      .then((data) => {
-        if (Array.isArray(data)) setMyFarms(data);
-      })
-      .catch(console.error);
-  }, []);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();

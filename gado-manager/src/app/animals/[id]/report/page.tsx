@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useState, use } from "react";
+import { useState, use } from "react";
+import { useCachedData } from "@/lib/use-cached-data";
 import Link from "next/link";
 import { ArrowLeft, Download, FileText, Table, Scale, Syringe, Bug, Pill } from "lucide-react";
 import {
@@ -15,9 +16,6 @@ import {
   Pie,
   Cell,
 } from "recharts";
-import jsPDF from "jspdf";
-import autoTable from "jspdf-autotable";
-import * as XLSX from "xlsx";
 import { downloadCsv } from "@/lib/csv";
 
 interface ReportData {
@@ -86,28 +84,18 @@ export default function ReportPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = use(params);
-  const [report, setReport] = useState<ReportData | null>(null);
-  const [loading, setLoading] = useState(true);
+  // Chave "animal:<id>:report": a ficha do boi limpa "animal:" ao lançar um
+  // registro, então o relatório nunca fica desatualizado.
+  const { data: report, loading } = useCachedData<ReportData>(`animal:${id}:report`, async () => {
+    const res = await fetch(`/api/animals/${id}/report`);
+    if (!res.ok) throw new Error("Failed to load report");
+    return res.json();
+  });
   const [selectedPeriod, setSelectedPeriod] = useState<string>("all");
   const [showPesagens, setShowPesagens] = useState(true);
   const [showVacinas, setShowVacinas] = useState(true);
   const [showVermifugos, setShowVermifugos] = useState(true);
   const [showVitaminas, setShowVitaminas] = useState(true);
-
-  useEffect(() => {
-    async function load() {
-      try {
-        const res = await fetch(`/api/animals/${id}/report`);
-        if (!res.ok) throw new Error("Failed to load report");
-        setReport(await res.json());
-      } catch (err) {
-        console.error(err);
-      } finally {
-        setLoading(false);
-      }
-    }
-    load();
-  }, [id]);
 
   function getFilteredPesagens(pesagens: ReportData["pesagens"]) {
     if (selectedPeriod === "all") return pesagens;
@@ -117,8 +105,13 @@ export default function ReportPage({
     return pesagens.filter((p) => new Date(p.dataPesagem) >= cutoff);
   }
 
-  function exportPDF() {
+  async function exportPDF() {
     if (!report) return;
+    // Bibliotecas pesadas carregadas só no clique (a página abre bem mais rápido)
+    const [{ default: jsPDF }, { default: autoTable }] = await Promise.all([
+      import("jspdf"),
+      import("jspdf-autotable"),
+    ]);
     const doc = new jsPDF();
     const pageWidth = doc.internal.pageSize.getWidth();
     let y = 20;
@@ -344,8 +337,9 @@ export default function ReportPage({
     );
   }
 
-  function exportXLSX() {
+  async function exportXLSX() {
     if (!report) return;
+    const XLSX = await import("xlsx");
     const wb = XLSX.utils.book_new();
 
     // Pesagens sheet

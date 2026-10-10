@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback, useRef } from "react";
+import { useEffect, useCallback, useRef, useSyncExternalStore } from "react";
 
 /**
  * Cache de dados em memória (stale-while-revalidate).
@@ -20,9 +20,37 @@ interface CacheEntry {
   timestamp: number;
   lastAttempt: number;
   promise: Promise<unknown> | null; // dedup: requisições em andamento
+  rev: number; // muda a cada alteração: é o "snapshot" lido pelo React
 }
 
 const cache = new Map<string, CacheEntry>();
+let globalRev = 0;
+
+// Componentes que usam a mesma chave são avisados quando o dado muda
+// (ex.: aprovar um pedido atualiza o contador do menu na hora).
+const listeners = new Map<string, Set<() => void>>();
+
+function notify(key: string) {
+  const e = cache.get(key);
+  if (e) e.rev = ++globalRev;
+  listeners.get(key)?.forEach((fn) => fn());
+}
+
+function subscribe(key: string, fn: () => void): () => void {
+  let set = listeners.get(key);
+  if (!set) {
+    set = new Set();
+    listeners.set(key, set);
+  }
+  set.add(fn);
+  return () => {
+    set!.delete(fn);
+  };
+}
+
+// Snapshots especiais do useSyncExternalStore
+const SERVER_SNAPSHOT = -2; // render no servidor e hidratação: "sem dados"
+const NO_KEY = -1;
 
 // TTL padrão: 30s. Dentro desse prazo, nem revalida em background.
 const DEFAULT_TTL_MS = 30_000;
@@ -62,6 +90,7 @@ function getEntry(key: string): CacheEntry {
       timestamp: 0,
       lastAttempt: 0,
       promise: null,
+      rev: ++globalRev,
     };
     cache.set(key, entry);
   }
@@ -81,15 +110,18 @@ function revalidate<T>(key: string, fetcher: () => Promise<T>): Promise<T> {
       entry.error = null;
       entry.timestamp = Date.now();
       entry.promise = null;
+      notify(key);
       return data;
     })
     .catch((err) => {
       entry.promise = null;
       entry.error = err instanceof Error ? err : new Error(String(err));
+      notify(key);
       throw err;
     });
 
   entry.promise = promise;
+  notify(key); // mostra "atualizando" para quem estiver na tela
   return promise;
 }
 
@@ -130,17 +162,29 @@ export function useCachedData<T>(
   fetcher: () => Promise<T>,
   ttlMs: number = DEFAULT_TTL_MS
 ): CachedDataResult<T> {
-  // Versão é incrementada quando o cache muda, para re-ler os dados dele.
-  const [version, setVersion] = useState(0);
-
   // Mantém a fetcher mais recente sem re-disparar o efeito.
   const fetcherRef = useRef(fetcher);
   useEffect(() => {
     fetcherRef.current = fetcher;
   });
 
+  // Lê o cache via useSyncExternalStore: na HIDRATAÇÃO o React usa o snapshot
+  // do servidor (sem dados, igual ao HTML que veio pronto) e só depois aplica
+  // o cache. Ler o cache direto no render fazia a página "acordar" diferente do
+  // HTML do servidor quando outro componente (ex.: o menu) já tinha preenchido
+  // o cache — o React descartava tudo e redesenhava (tela piscando/sumindo).
+  const subscribeKey = useCallback(
+    (onChange: () => void) => (key ? subscribe(key, onChange) : () => {}),
+    [key]
+  );
+  const rev = useSyncExternalStore(
+    subscribeKey,
+    () => (key ? getEntry(key).rev : NO_KEY),
+    () => SERVER_SNAPSHOT
+  );
+
   // Estado DERIVADO do cache (sem setState em efeitos):
-  const entry = key ? getEntry(key) : null;
+  const entry = key && rev !== SERVER_SNAPSHOT ? getEntry(key) : null;
   const hasData = entry !== null && entry.data !== undefined;
   const data = hasData ? (entry.data as T) : null;
   const isInFlight = entry !== null && entry.promise !== null;
@@ -154,21 +198,9 @@ export function useCachedData<T>(
     const e = getEntry(key);
     if (!needsFetch(e, ttlMs)) return;
 
-    let cancelled = false;
-    revalidate(key, () => fetcherRef.current())
-      .then(() => {
-        if (!cancelled) setVersion((v) => v + 1);
-      })
-      .catch(() => {
-        // Com backoff, erro não re-dispara o efeito em loop:
-        // só atualiza a versão para exibir a mensagem de erro.
-        if (!cancelled) setVersion((v) => v + 1);
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [key, ttlMs, version]);
+    // Erros ficam registrados na entrada (com backoff) e chegam à tela via notify
+    revalidate(key, () => fetcherRef.current()).catch(() => {});
+  }, [key, ttlMs, rev]);
 
   const refresh = useCallback(async () => {
     if (!key) return;
@@ -177,12 +209,7 @@ export function useCachedData<T>(
     e.error = null;
     e.timestamp = 0;
     e.lastAttempt = 0;
-    setVersion((v) => v + 1);
-    try {
-      await revalidate(key, () => fetcherRef.current());
-    } finally {
-      setVersion((v) => v + 1);
-    }
+    await revalidate(key, () => fetcherRef.current()).catch(() => {});
   }, [key]);
 
   const mutate = useCallback(
@@ -198,7 +225,7 @@ export function useCachedData<T>(
       e.error = null;
       e.timestamp = Date.now();
       e.lastAttempt = Date.now();
-      setVersion((v) => v + 1);
+      notify(key);
     },
     [key]
   );
@@ -211,11 +238,37 @@ export function useCachedData<T>(
  * Útil ao trocar de fazenda ou fazer logout.
  */
 export function clearDataCache(prefix?: string) {
-  if (!prefix) {
-    cache.clear();
-    return;
+  const keys = [...cache.keys()].filter((k) => !prefix || k.startsWith(prefix));
+  for (const k of keys) cache.delete(k);
+  // Quem está na tela com essas chaves busca de novo
+  for (const k of keys) notify(k);
+}
+
+/**
+ * Marca dados como VELHOS sem apagá-los (todo o cache ou só um prefixo).
+ * A tela continua mostrando o que tem e atualiza em segundo plano — sem piscar
+ * o esqueleto de carregamento. Use depois de criar/editar/excluir algo.
+ * (clearDataCache apaga de vez: só para logout / troca de fazenda.)
+ */
+export function invalidateDataCache(prefix?: string) {
+  const keys = [...cache.keys()].filter((k) => !prefix || k.startsWith(prefix));
+  for (const k of keys) {
+    const e = cache.get(k)!;
+    e.timestamp = 0;
+    e.error = null;
+    e.lastAttempt = 0;
   }
-  for (const k of cache.keys()) {
-    if (k.startsWith(prefix)) cache.delete(k);
-  }
+  for (const k of keys) notify(k);
+}
+
+/**
+ * Preenche o cache com um dado já conhecido (ex.: salvo no sessionStorage)
+ * para a tela aparecer na hora. O dado é tratado como velho e revalidado.
+ */
+export function primeDataCache<T>(key: string, data: T) {
+  const e = getEntry(key);
+  if (e.data !== undefined) return;
+  e.data = data;
+  e.timestamp = 0;
+  notify(key);
 }

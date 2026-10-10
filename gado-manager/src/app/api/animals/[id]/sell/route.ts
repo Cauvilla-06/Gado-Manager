@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { sellAnimal } from "@/services/cycle-service";
 import { apiHandler, ForbiddenError } from "@/lib/api-errors";
 import { requireFarm } from "@/lib/farm";
-import { animalBelongsToFarm, userCanWriteToFarm } from "@/lib/ownership";
+import { animalBelongsToFarm, canManageHerd } from "@/lib/ownership";
 
 interface RouteContext {
   params: Promise<{ id: string }>;
@@ -10,7 +10,7 @@ interface RouteContext {
 
 export const POST = apiHandler<RouteContext>(async (request: NextRequest, context) => {
   const { id } = await context.params;
-  const { user, farm } = await requireFarm();
+  const { farm, membership } = await requireFarm();
 
   // Ownership validation
   const belongs = await animalBelongsToFarm(id, farm.id);
@@ -19,7 +19,7 @@ export const POST = apiHandler<RouteContext>(async (request: NextRequest, contex
   }
 
   // Role validation: MEMBER é somente leitura
-  const canWrite = await userCanWriteToFarm(user.id, farm.id);
+  const canWrite = canManageHerd(membership.role);
   if (!canWrite) {
     throw new ForbiddenError("Seu nível de acesso não permite vender animais");
   }

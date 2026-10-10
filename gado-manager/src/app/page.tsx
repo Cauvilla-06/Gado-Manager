@@ -1,8 +1,10 @@
 "use client";
 
 import { useState, useMemo } from "react";
-import { useCachedData, clearDataCache } from "@/lib/use-cached-data";
+import { useCachedData, invalidateDataCache } from "@/lib/use-cached-data";
 import Link from "next/link";
+import { useSession } from "@/lib/use-session";
+import { canManageHerd } from "@/lib/permissions";
 import {
   Plus,
   TrendingUp,
@@ -15,6 +17,8 @@ import {
   ShoppingCart,
   AlertTriangle,
 } from "lucide-react";
+
+const CARDS_PER_PAGE = 30;
 
 interface DashboardStats {
   totalAtivos: number;
@@ -141,9 +145,12 @@ function AnimalCard({ animal }: { animal: AnimalListItem }) {
 }
 
 export default function HomePage() {
+  // MEMBER não cadastra boi: esconde o botão (o servidor também bloqueia)
+  const { data: session } = useSession();
+  const canManage = !!session?.role && canManageHerd(session.role);
   // Dados em cache: navegar de volta ao dashboard é instantâneo.
   const { data, loading, refreshing, refresh, error } = useCachedData<{
-    stats: { totalAtivos: number; totalVendidos: number };
+    stats: DashboardStats;
     animals: AnimalListItem[];
   }>(
     "dashboard:stats",
@@ -151,11 +158,13 @@ export default function HomePage() {
       const res = await fetch("/api/dashboard/stats");
       const d = res.ok
         ? await res.json()
-        : { stats: { totalAtivos: 0, totalVendidos: 0 }, animals: [] };
+        : { stats: {}, animals: [] };
       return {
         stats: {
-          totalAtivos: d.stats.totalAtivos,
-          totalVendidos: d.stats.totalVendidos,
+          totalAtivos: d.stats.totalAtivos ?? 0,
+          totalVendidos: d.stats.totalVendidos ?? 0,
+          totalPesagens: d.stats.totalPesagens ?? 0,
+          totalVacinas: d.stats.totalVacinas ?? 0,
         },
         animals: d.animals,
       };
@@ -163,16 +172,15 @@ export default function HomePage() {
     15_000
   );
 
-  const stats: DashboardStats | null = data
-    ? {
-        totalAtivos: data.stats.totalAtivos,
-        totalVendidos: data.stats.totalVendidos,
-        totalPesagens: 0,
-        totalVacinas: 0,
-      }
-    : null;
+  const stats: DashboardStats | null = data ? data.stats : null;
   const [searchQuery, setSearchQuery] = useState("");
   const [filterStatus, setFilterStatus] = useState("all");
+
+  // Desenhar centenas de cartões de uma vez travava a tela a cada visita:
+  // mostra aos poucos (a busca continua procurando em todos).
+  const filterKey = `${searchQuery}|${filterStatus}`;
+  const [shown, setShown] = useState({ key: filterKey, count: CARDS_PER_PAGE });
+  const visibleCount = shown.key === filterKey ? shown.count : CARDS_PER_PAGE;
 
   const filteredAnimals = useMemo(() => {
     const animals = data?.animals ?? [];
@@ -233,10 +241,7 @@ export default function HomePage() {
           </p>
         </div>
         <button
-          onClick={() => {
-            clearDataCache("dashboard");
-            refresh();
-          }}
+          onClick={() => refresh()}
           className={`rounded-lg p-2 text-muted-foreground hover:bg-accent transition-colors ${
             refreshing ? "animate-spin" : ""
           }`}
@@ -244,15 +249,17 @@ export default function HomePage() {
         >
           <RefreshCw className="h-4 w-4" />
         </button>
-        <Link
-          href="/animals/new"
-          className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2.5 text-sm font-medium text-primary-foreground shadow-sm hover:bg-primary/90 transition-colors"
-          onClick={() => clearDataCache("dashboard")}
-        >
-          <Plus className="h-4 w-4" />
-          <span className="hidden sm:inline">Novo Animal</span>
-          <span className="sm:hidden">Novo</span>
-        </Link>
+        {canManage && (
+          <Link
+            href="/animals/new"
+            className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2.5 text-sm font-medium text-primary-foreground shadow-sm hover:bg-primary/90 transition-colors"
+            onClick={() => invalidateDataCache("dashboard")}
+          >
+            <Plus className="h-4 w-4" />
+            <span className="hidden sm:inline">Novo Animal</span>
+            <span className="sm:hidden">Novo</span>
+          </Link>
+        )}
       </div>
 
       {stats && (
@@ -315,7 +322,7 @@ export default function HomePage() {
               ? "Tente ajustar os filtros de busca."
               : "Comece cadastrando seu primeiro animal."}
           </p>
-          {!searchQuery && filterStatus === "all" && (
+          {canManage && !searchQuery && filterStatus === "all" && (
             <Link
               href="/animals/new"
               className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
@@ -326,11 +333,25 @@ export default function HomePage() {
           )}
         </div>
       ) : (
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {filteredAnimals.map((animal) => (
-            <AnimalCard key={animal.id} animal={animal} />
-          ))}
-        </div>
+        <>
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            {filteredAnimals.slice(0, visibleCount).map((animal) => (
+              <AnimalCard key={animal.id} animal={animal} />
+            ))}
+          </div>
+          {filteredAnimals.length > visibleCount && (
+            <div className="flex justify-center">
+              <button
+                onClick={() =>
+                  setShown({ key: filterKey, count: visibleCount + CARDS_PER_PAGE })
+                }
+                className="rounded-lg border px-4 py-2 text-sm font-medium hover:bg-accent transition-colors"
+              >
+                Mostrar mais ({filteredAnimals.length - visibleCount} restantes)
+              </button>
+            </div>
+          )}
+        </>
       )}
     </div>
   );

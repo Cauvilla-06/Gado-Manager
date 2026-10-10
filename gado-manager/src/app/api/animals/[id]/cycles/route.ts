@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getCyclesByAnimal, startNewCycle } from "@/services/cycle-service";
 import { apiHandler, ForbiddenError } from "@/lib/api-errors";
 import { requireFarm } from "@/lib/farm";
-import { animalBelongsToFarm, userCanWriteToFarm } from "@/lib/ownership";
+import { animalBelongsToFarm, canManageHerd } from "@/lib/ownership";
 import { cycleSchema } from "@/lib/validations";
 
 const newCycleSchema = cycleSchema.pick({ observacoes: true });
@@ -28,14 +28,14 @@ export const GET = apiHandler<RouteContext>(async (request: NextRequest, context
 export const POST = apiHandler<RouteContext>(async (request: NextRequest, context) => {
   const { id } = await context.params;
   const body = await request.json();
-  const { user, farm } = await requireFarm();
+  const { farm, membership } = await requireFarm();
 
   const belongs = await animalBelongsToFarm(id, farm.id);
   if (!belongs) {
     throw new ForbiddenError("Este animal não pertence a esta fazenda");
   }
 
-  const canWrite = await userCanWriteToFarm(user.id, farm.id);
+  const canWrite = canManageHerd(membership.role);
   if (!canWrite) {
     throw new ForbiddenError("Seu nível de acesso não permite iniciar ciclos");
   }

@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState } from "react";
+import { useCachedData, invalidateDataCache } from "@/lib/use-cached-data";
 import Link from "next/link";
 import { ArrowLeft, Check, X, Users, Clock } from "lucide-react";
 
@@ -14,26 +15,16 @@ interface JoinRequest {
 }
 
 export default function FarmRequestsPage() {
-  const [requests, setRequests] = useState<JoinRequest[]>([]);
-  const [loading, setLoading] = useState(true);
+  // Cache: voltar para esta página é instantâneo; revalida em segundo plano.
+  const { data, loading, mutate } = useCachedData<JoinRequest[]>("farm:requests", async () => {
+    const res = await fetch("/api/farms/join");
+    const body = await res.json();
+    if (!res.ok || !Array.isArray(body)) throw new Error(body?.error || "Erro ao carregar pedidos");
+    return body;
+  });
+  const requests = data ?? [];
   const [processingId, setProcessingId] = useState<string | null>(null);
-
-  useEffect(() => {
-    async function loadRequests() {
-      try {
-        const res = await fetch("/api/farms/join");
-        const data = await res.json();
-        if (Array.isArray(data)) {
-          setRequests(data);
-        }
-      } catch (err) {
-        console.error(err);
-      } finally {
-        setLoading(false);
-      }
-    }
-    loadRequests();
-  }, []);
+  const [error, setError] = useState<string | null>(null);
 
   async function handleAction(requestId: string, action: "APROVADO" | "REJEITADO") {
     setProcessingId(requestId);
@@ -45,10 +36,18 @@ export default function FarmRequestsPage() {
       });
 
       if (res.ok) {
-        setRequests((prev) => prev.filter((r) => r.id !== requestId));
+        mutate((prev) => (prev ?? []).filter((r) => r.id !== requestId));
+        // Contador do menu e lista de membros mudaram
+        invalidateDataCache("session");
+        invalidateDataCache("farm:members");
+        setError(null);
+      } else {
+        const body = await res.json().catch(() => ({}));
+        setError(body.error || "Erro ao processar pedido");
       }
     } catch (err) {
       console.error(err);
+      setError("Erro ao processar pedido");
     } finally {
       setProcessingId(null);
     }
@@ -85,6 +84,12 @@ export default function FarmRequestsPage() {
           </p>
         </div>
       </div>
+
+      {error && (
+        <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
+          {error}
+        </div>
+      )}
 
       {requests.length === 0 ? (
         <div className="rounded-xl border border-dashed py-16 text-center">

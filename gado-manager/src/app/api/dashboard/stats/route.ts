@@ -7,13 +7,16 @@ export const GET = apiHandler(async () => {
   const { farm } = await requireFarm();
 
   // Use a single query to aggregate everything we need
-  const [stats, animalsSummary] = await Promise.all([
+  const [stats, totalPesagens, totalVacinas, animalsSummary] = await Promise.all([
     // Aggregate counts in a single query
     db.animal.groupBy({
       by: ["status"],
       where: { farmId: farm.id },
       _count: { id: true },
     }),
+    // Totais da fazenda para os cartões do dashboard (antes ficavam sempre 0)
+    db.weightRecord.count({ where: { animal: { farmId: farm.id } } }),
+    db.vaccination.count({ where: { animal: { farmId: farm.id } } }),
     // Get animals with only the data needed for the dashboard list
     db.animal.findMany({
       where: { farmId: farm.id },
@@ -90,6 +93,8 @@ export const GET = apiHandler(async () => {
       totalAtivos,
       totalVendidos,
       totalAnimais: totalAtivos + totalVendidos,
+      totalPesagens,
+      totalVacinas,
     },
     animals: animalItems,
   });

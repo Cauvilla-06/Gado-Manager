@@ -2,129 +2,27 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { LogOut, Beef, ChevronDown, Users, UserCog } from "lucide-react";
 import { clearDataCache } from "@/lib/use-cached-data";
-
-interface FarmInfo {
-  id: string;
-  name: string;
-  code: string;
-  role: string;
-  animalCount: number;
-}
-
-interface UserInfo {
-  id: string;
-  name: string;
-  email: string;
-}
+import { clearStoredSession, useSession } from "@/lib/use-session";
+import { canManageMembers } from "@/lib/permissions";
+import DevWarmup from "@/components/DevWarmup";
 
 export default function Navbar() {
   const pathname = usePathname();
-  const [user, setUser] = useState<UserInfo | null>(null);
-  const [farms, setFarms] = useState<FarmInfo[]>([]);
-  const [currentFarm, setCurrentFarm] = useState<FarmInfo | null>(null);
   const [showFarmMenu, setShowFarmMenu] = useState(false);
-  const [pendingRequests, setPendingRequests] = useState(0);
-  const [loading, setLoading] = useState(true);
 
-  // Fetch current user on mount — com cache em sessionStorage para não
-  // recarregar tudo a cada F5 / troca de fazenda.
-  useEffect(() => {
-    async function fetchUser() {
-      try {
-        const cached = sessionStorage.getItem("gm:user");
-        if (cached) {
-          setUser(JSON.parse(cached));
-          setLoading(false);
-          // Revalida em background para pegar mudanças de sessão.
-          const res = await fetch("/api/auth/me", { credentials: "include" });
-          if (res.ok) {
-            const data = await res.json();
-            if (data.user) {
-              setUser(data.user);
-              sessionStorage.setItem("gm:user", JSON.stringify(data.user));
-            } else {
-              sessionStorage.removeItem("gm:user");
-              setUser(null);
-            }
-          } else if (res.status === 401) {
-            sessionStorage.removeItem("gm:user");
-            setUser(null);
-          }
-          return;
-        }
-        const res = await fetch("/api/auth/me", { credentials: "include" });
-        if (!res.ok) return;
-        const data = await res.json();
-        if (data.user) {
-          setUser(data.user);
-          sessionStorage.setItem("gm:user", JSON.stringify(data.user));
-        }
-      } catch {
-        // Not authenticated
-      } finally {
-        setLoading(false);
-      }
-    }
-    fetchUser();
-  }, []);
-
-  // Fetch farms when user is known
-  useEffect(() => {
-    if (!user) return;
-
-    async function loadFarms() {
-      try {
-        const cached = sessionStorage.getItem("gm:farms");
-        if (cached) {
-          applyFarms(JSON.parse(cached));
-        }
-        const res = await fetch("/api/farms", { credentials: "include" });
-        const data = await res.json();
-        if (Array.isArray(data)) {
-          sessionStorage.setItem("gm:farms", JSON.stringify(data));
-          applyFarms(data);
-        }
-      } catch (err) {
-        console.error(err);
-      }
-    }
-
-    function applyFarms(data: FarmInfo[]) {
-          setFarms(data);
-          if (data.length > 0) {
-            const selectedFarmId = document.cookie
-              .split("; ")
-              .find((c) => c.startsWith("selected-farm-id="))
-              ?.split("=")[1];
-            const farm = selectedFarmId
-              ? data.find((f: FarmInfo) => f.id === selectedFarmId) || data[0]
-              : data[0];
-            setCurrentFarm(farm);
-          }
-        }
-    loadFarms();
-  }, [user]);
-
-  // Fetch pending requests
-  useEffect(() => {
-    if (!currentFarm || !["OWNER", "ADMIN"].includes(currentFarm.role)) return;
-
-    async function loadRequests() {
-      try {
-        const res = await fetch("/api/farms/join", { credentials: "include" });
-        const data = await res.json();
-        if (Array.isArray(data)) {
-          setPendingRequests(data.length);
-        }
-      } catch (err) {
-        console.error(err);
-      }
-    }
-    loadRequests();
-  }, [currentFarm]);
+  // Usuário, fazendas e pedidos pendentes numa chamada só, compartilhada
+  // com as páginas (antes: /me + /api/farms + /api/farms/join em cascata,
+  // repetidos a cada render — até 10 chamadas por página).
+  const isAuthPage = pathname === "/login" || pathname === "/register";
+  const { data: session, loading } = useSession(!isAuthPage);
+  const user = isAuthPage ? null : session?.user ?? null;
+  const farms = session?.farms ?? [];
+  const currentFarm = farms.find((f) => f.id === session?.farm?.id) ?? null;
+  const pendingRequests =
+    currentFarm && canManageMembers(currentFarm.role) ? session?.pendingRequests ?? 0 : 0;
 
   async function handleLogout(todosDispositivos = false) {
     if (
@@ -135,8 +33,8 @@ export default function Navbar() {
     ) {
       return;
     }
-    sessionStorage.removeItem("gm:user");
-    sessionStorage.removeItem("gm:farms");
+    clearStoredSession();
+    clearDataCache();
     await fetch("/api/auth/logout", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -146,7 +44,7 @@ export default function Navbar() {
   }
 
   // Don't render on auth pages
-  if (pathname === "/login" || pathname === "/register") {
+  if (isAuthPage) {
     return null;
   }
 
@@ -181,6 +79,8 @@ export default function Navbar() {
 
   return (
     <header className="sticky top-0 z-50 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
+      {/* Só em `npm run dev`: deixa as outras páginas prontas em segundo plano */}
+      <DevWarmup />
       <div className="mx-auto flex h-14 max-w-7xl items-center px-4 sm:px-6">
         <Link
           href="/"
@@ -239,7 +139,7 @@ export default function Navbar() {
                         <button
                           key={f.id}
                           onClick={async () => {
-                            setCurrentFarm(f);
+                            if (f.id === currentFarm.id) return;
                             setShowFarmMenu(false);
                             await fetch("/api/farms/switch", {
                               method: "POST",
@@ -247,7 +147,7 @@ export default function Navbar() {
                               body: JSON.stringify({ farmId: f.id }),
                             });
                             // Dados pertencem à fazenda: limpa caches.
-                            sessionStorage.removeItem("gm:farms");
+                            clearStoredSession();
                             clearDataCache();
                             window.location.reload();
                           }}
@@ -315,7 +215,7 @@ export default function Navbar() {
                       >
                         🔗 Entrar em outra fazenda
                       </Link>
-                      {["OWNER", "ADMIN"].includes(currentFarm.role) && (
+                      {canManageMembers(currentFarm.role) && (
                         <Link
                           href="/farms/requests"
                           onClick={() => setShowFarmMenu(false)}

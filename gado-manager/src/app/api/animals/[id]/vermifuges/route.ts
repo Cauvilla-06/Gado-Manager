@@ -5,7 +5,7 @@ import {
   getVermifugesByAnimal,
 } from "@/services/vermifuge-service";
 import { apiHandler, ForbiddenError } from "@/lib/api-errors";
-import { animalBelongsToFarm, userCanRecordInFarm } from "@/lib/ownership";
+import { animalBelongsToFarm, canRecord } from "@/lib/ownership";
 
 interface RouteContext {
   params: Promise<{ id: string }>;
@@ -30,7 +30,7 @@ export const GET = apiHandler<RouteContext>(async (request: NextRequest, context
 export const POST = apiHandler<RouteContext>(async (request: NextRequest, context) => {
   const { id } = await context.params;
   const body = await request.json();
-  const { user, farm } = await requireFarm();
+  const { user, farm, membership } = await requireFarm();
 
   // Ownership validation
   const belongs = await animalBelongsToFarm(id, farm.id);
@@ -39,8 +39,8 @@ export const POST = apiHandler<RouteContext>(async (request: NextRequest, contex
   }
 
   // OWNER, ADMIN e MEMBER podem lançar registros de manejo
-  const canRecord = await userCanRecordInFarm(user.id, farm.id);
-  if (!canRecord) {
+  const allowed = canRecord(membership.role);
+  if (!allowed) {
     throw new ForbiddenError("Seu nível de acesso não permite registrar vermífugos");
   }
 

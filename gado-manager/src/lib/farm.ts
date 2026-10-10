@@ -15,10 +15,27 @@ export async function getCurrentFarm() {
       return { user: null, farm: null, membership: null };
     }
 
-    const found = await db.user.findUnique({
-      where: { id: userId },
-      select: { id: true, name: true, email: true, tokenVersion: true },
-    });
+    // Usuário e vínculo com a fazenda em PARALELO: no Turso cada consulta é
+    // uma ida à internet, então duas em sequência dobravam o tempo.
+    const selectedFarmId = h.get("x-selected-farm-id");
+    const [found, membership] = await Promise.all([
+      db.user.findUnique({
+        where: { id: userId },
+        select: { id: true, name: true, email: true, tokenVersion: true },
+      }),
+      selectedFarmId
+        ? // Fazenda escolhida no cookie: só vale se o usuário for membro dela
+          db.farmMembership.findFirst({
+            where: { userId, farmId: selectedFarmId },
+            include: { farm: true },
+          })
+        : // Sem escolha: primeira fazenda do usuário
+          db.farmMembership.findFirst({
+            where: { userId },
+            include: { farm: true },
+            orderBy: { criadoEm: "asc" },
+          }),
+    ]);
 
     // Token emitido antes de um "sair de todos os dispositivos" não vale mais
     const tokenVersion = Number(h.get("x-token-version") ?? "0");
@@ -27,31 +44,6 @@ export async function getCurrentFarm() {
     }
 
     const user = { id: found.id, name: found.name, email: found.email };
-
-    // Check if user has selected a specific farm via cookie
-    let membership;
-    const selectedFarmId = h.get("x-selected-farm-id");
-
-    if (selectedFarmId) {
-      membership = await db.farmMembership.findFirst({
-        where: { userId: user.id, farmId: selectedFarmId },
-        include: { farm: true },
-      });
-
-      // Se selecionou uma farm específica mas não tem acesso, retorna null
-      if (!membership) {
-        return { user, farm: null, membership: null };
-      }
-    }
-
-    // Fallback to first farm
-    if (!membership) {
-      membership = await db.farmMembership.findFirst({
-        where: { userId: user.id },
-        include: { farm: true },
-        orderBy: { criadoEm: "asc" },
-      });
-    }
 
     if (!membership) {
       return { user, farm: null, membership: null };

@@ -4,7 +4,7 @@ import { db } from "@/lib/db";
 import { apiHandler } from "@/lib/api-errors";
 
 export const GET = apiHandler(async () => {
-  const { farm } = await requireFarm();
+  const { user, farm, membership } = await requireFarm();
 
   const memberships = await db.farmMembership.findMany({
     where: { farmId: farm.id },
@@ -24,5 +24,10 @@ export const GET = apiHandler(async () => {
     joinedAt: m.criadoEm,
   }));
 
-  return NextResponse.json({ farm: { name: farm.name, code: farm.code }, members });
+  return NextResponse.json({
+    farm: { name: farm.name, code: farm.code },
+    members,
+    // Para a tela saber quem é "você" e quais botões de remover mostrar
+    me: { id: user.id, role: membership.role },
+  });
 });
